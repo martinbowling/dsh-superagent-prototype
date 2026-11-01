@@ -13,6 +13,7 @@ import time
 import urllib.request
 import urllib.error
 import socket
+from reasoning_gateway import off_prefill_gateway
 
 ROOT=Path(__file__).resolve().parent
 
@@ -56,6 +57,8 @@ def plan(config):
         {'id':'mixed-roles','coordinator_worker_pairs':[[a,b] for a in available for b in available if a!=b],'worker_counts':[2,4],'repeats':3},
         {'id':'output-budget','models':available,'budgets':[8192,32768,65536,131072],
          'gate':'Only budgets that fit the backend context with measured prompt headroom; stop on repeated output.'}],
+      'reasoning_experiment':{'modes':['off','on'],'repeats':3,
+        'gate':'Verify native template controls. Unsupported modes are unavailable, not relabeled. Keep tasks and output reservations identical.'},
       'metrics':['objective test pass rate','completed tickets per minute','wall latency p50/p95','all-role output tokens per second',
                  'per-role prompt/output tokens','tool failures','max-token endings','actual peak model requests'],
       'rubric':{'correctness':60,'tool_workflow':15,'code_quality_blind_review':15,'scope_and_reporting':10},
@@ -64,12 +67,16 @@ def plan(config):
                'Count coordinator, workers and any helpers in resource totals.','A token-limited ending is incomplete, never a pass.',
                'No GPU service restarts, external messages, deployments, or automated merges.']}
 
-def overlay(config,state,coordinator):
+def thinking_kwargs(model,mode):
+    controls=model.get('thinking_controls',{'off':{'enable_thinking':False},'on':{'enable_thinking':True}})
+    return controls.get(mode)
+
+def overlay(config,state,coordinator,thinking='off'):
     providers={}
     for name,m in config['models'].items():
         providers['arena-'+name]={'api':'openai-completions','baseURL':m['base_url'],'apiKeyEnv':'ARENA_LOCAL_KEY',
           'compat':{'supportsDeveloperRole':False,'maxTokensField':'max_tokens',
-                    'thinkingFormat':'chat-template','chatTemplateKwargs':{'enable_thinking':False}},
+                    'thinkingFormat':'chat-template','chatTemplateKwargs':thinking_kwargs(m,thinking) or {}},
           'models':[{'id':m['model'],'contextWindow':m['context_window'],'maxTokens':m['max_tokens'],
                      'reasoningEfforts':{'off':None,'low':'low'}}], 'retryPolicy':{'mode':'normal','maxRetries':0}}
     persona={'id':'persona','name':'@deepseek-ai/dsh-persona','config':{'prefix':'You are a software engineer completing bounded local experiment tickets.'}}
@@ -86,16 +93,22 @@ def overlay(config,state,coordinator):
       {'id':'compaction-basic','config':{'headroomTokens':1024,'maxTokens':2048}},
     ]
 
-def run(config,coordinator,worker,count,tasks,output,timeout):
+def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
+    with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
+        return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
+
+def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
     for name in {coordinator,worker}:
         model=config['models'][name]
         if not 0<model['max_tokens']<model['context_window']:
             raise ValueError('Output reservation must leave context room for the prompt')
+        if thinking_kwargs(model,thinking) is None:
+            raise ValueError(f'{name} has no verified native thinking={thinking} control; this arm is unavailable')
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',config.get('port',3086)))==0:raise RuntimeError('Dedicated Harness port is already in use; no process was changed')
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
     state=output/'state';state.mkdir()
-    run_id=f'{coordinator}-{worker}-w{count}'
+    run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}'
     selected=[t for t in json.loads((ROOT/'tasks.json').read_text()) if not tasks or t['id'] in tasks]
     if not selected:raise ValueError('No matching tasks')
     # At least count tickets for a scaling run; names remain disjoint and deterministic.
@@ -107,8 +120,10 @@ def run(config,coordinator,worker,count,tasks,output,timeout):
         'models':config['models'],'fixture_sha256':hashlib.sha256(encoded).hexdigest(),
         'dsh_version':config.get('dsh_version'),'upstream_revision':config.get('upstream_revision'),
         'started':time.time(),'status':'starting','scope':'real superagent local fixture tickets'}
-    manifest['requested_thinking_mode']='disabled via chat_template_kwargs.enable_thinking=false; verify backend behavior'
-    patch=output/'patch.json';patch.write_text(json.dumps(overlay(config,state,coordinator),indent=2))
+    manifest['requested_thinking_mode']=thinking
+    manifest['thinking_controls']={name:thinking_kwargs(config['models'][name],thinking) for name in {coordinator,worker}}
+    manifest['thinking_transport']={name:'closed-think-prefill' if thinking=='off' and config['models'][name].get('thinking_off_prefill') else 'native-template-kwargs' for name in {coordinator,worker}}
+    patch=output/'patch.json';patch.write_text(json.dumps(overlay(config,state,coordinator,thinking),indent=2))
     # Session ids are deterministic in the prototype. Every run needs a fresh
     # HOME, not just a fresh SQLite database, to avoid cross-arm history/model reuse.
     home=output/'harness-home';profile=config.get('profile','arena')
@@ -198,10 +213,13 @@ if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('action',choices=['plan','preflight','run']);p.add_argument('--config',type=Path,required=True)
     p.add_argument('--coordinator',default='blackfold');p.add_argument('--worker',default='blackfold')
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
-    p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=600);a=p.parse_args()
+    p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=600)
+    p.add_argument('--thinking',choices=['off','on'],default='off');p.add_argument('--max-tokens',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
+    if a.max_tokens is not None:
+        for name in {a.coordinator,a.worker}:c['models'][name]['max_tokens']=a.max_tokens
     if a.action=='plan':print(json.dumps(plan(c),indent=2))
     elif a.action=='preflight':print(json.dumps(preflight(c),indent=2))
     else:
         if not a.output:p.error('--output is required for a run')
-        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout),indent=2))
+        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout,a.thinking),indent=2))

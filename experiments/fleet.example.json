@@ -21,6 +21,11 @@
       "context_window": 32768,
       "max_tokens": 4096,
       "backend_concurrency": 1,
+      "thinking_controls": {
+        "on": {"reasoning_effort": "low"},
+        "off": {"reasoning_effort": "low", "enable_thinking": false}
+      },
+      "thinking_off_prefill": true,
       "hardware": "Record actual hosts, quantization and backend limits"
     },
     "qwen": {

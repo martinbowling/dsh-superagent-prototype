@@ -10,6 +10,7 @@ Production defaults are unchanged. `localFixtures: true` skips account setup, re
 2. **Worker scaling:** repeat each homogeneous team with 1, 2, 4 and 8 worker slots. Record in-flight requests and latency; add queue delay only if backend telemetry supplies it. Eight worker slots do not imply eight simultaneous GPU decodes.
 3. **Mixed roles:** compare GLM coordinator → BLACKFOLD workers, BLACKFOLD coordinator → Qwen workers, and the other ordered pairs. The upstream role-model mechanism supplies routing; every run uses fresh model selections and session history. This measures different coordinator/worker models, not a dynamically routed mixture within one worker pool. Nested helpers are disabled in this controlled suite.
 4. **Output budget:** compare 8K, 32K, 64K and 128K ceilings only where the backend's measured context has sufficient room. A 32K-context GLM service cannot be given a 128K output reservation. Record truncation and loops; never mark a cutoff as a successful task.
+5. **Reasoning on/off:** repeat identical fixtures and output reservations with `--thinking off` and `--thinking on`. Start with `--tasks intervals --max-tokens 8192`. Model-specific template controls are recorded in each manifest. Reasoning tokens count against the reservation.
 
 The first pilot is an integration check. It cannot establish a quality winner or validate the earlier theoretical four-Spark throughput estimates. TP2-replica versus TP4 deployment is a separate experiment requiring real backend changes and rollback, which these scripts do not perform.
 
@@ -47,6 +48,10 @@ python3 experiments/arena.py run --config /private/fleet.json \
 python3 experiments/arena.py run --config /private/fleet.json \
   --coordinator glm --worker blackfold --workers 4 \
   --output /private/runs/mixed-r1
+python3 experiments/arena.py run --config /private/fleet.json \
+  --coordinator blackfold --worker blackfold --workers 1 \
+  --tasks intervals --thinking on --max-tokens 8192 \
+  --output /private/runs/blackfold-thinking-on-r1
 python3 experiments/summarize.py /private/runs/blackfold-r1 /private/runs/mixed-r1
 ```
 
@@ -56,6 +61,8 @@ Use `--tasks intervals` for a small pilot. Scaling creates at least as many disj
 
 Each private run saves the manifest and fixture hash, settings overlay, raw session events, exact model-call start/end times, ticket states, replies and solution files. `summarize.py` counts coordinator and worker tokens, exact observed request concurrency, latency and objective test results. Missing metrics remain null. Its token rate is total reported output divided by full workflow wall time, including tools and orchestration; it is not decode-only tok/s. No rate is emitted if any request lacks usage or is interrupted. First-delta timing is measured at the Harness adapter and can be buffered; it is not guaranteed to be wire-level TTFT. Preserve failed launches and cutoffs alongside successes. The summary leaves code-quality review pending until it is actually performed.
 
-Observed request concurrency counts in-flight provider calls, including calls waiting in a backend queue. It is not a measurement of simultaneous GPU decode streams. Keep the backend's actual serving capacity beside that number. The profile explicitly requests thinking off through chat-template kwargs; verify the backend's response behavior before treating reasoning settings as matched.
+Observed request concurrency counts in-flight provider calls, including calls waiting in a backend queue. It is not a measurement of simultaneous GPU decode streams. Keep the backend's actual serving capacity beside that number. Verify response behavior before treating reasoning settings as matched.
+
+The retained GLM template ignores `enable_thinking=false`: it always opens a think block, and an absent or unsupported `reasoning_effort` selects maximum effort. The example config uses native `reasoning_effort=low` for on. For off, an explicit `thinking_off_prefill` adapter runs on an ephemeral loopback port, appends an empty assistant message, and sends `continue_final_message=true` with `add_generation_prompt=false`. This template renders that assistant as a closed `<think></think>` prefix. A live READY probe produced reasoning with native low and no reasoning with this prefill. This remains an experimental prompt mode, not a native GLM off switch; verify tool behavior and reasoning leakage in longer runs. No server/template files or model processes are changed. Set a mode's `thinking_controls` to null when it is unsupported; the runner refuses that arm. Older runs that sent only `enable_thinking=false` to this GLM must not be called off-mode evidence.
 
 Model/context/concurrency/quantization differences must remain explicit. A single-GB10 Qwen Next Flash and a multi-node BLACKFOLD or GLM service are a fleet comparison, not a hardware-normalized model benchmark. If Qwen is unavailable, record it as unavailable instead of substituting another model under its label. The example Qwen endpoint is a placeholder SSH-forward port, not evidence of a running service.

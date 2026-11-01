@@ -47,6 +47,8 @@ def summarize(root):
     accounted=sum(v['requests'] for v in usage.values())
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
+      'thinking_mode':manifest.get('requested_thinking_mode'),'thinking_controls':manifest.get('thinking_controls'),
+      'thinking_transport':manifest.get('thinking_transport'),
       'worker_count':manifest['workers'],'fixture_sha256':manifest['fixture_sha256'],
       'tickets':len(tickets),'verified_completed_tickets':len(successful),'expected_tickets':manifest.get('expected_tickets'),
       'wall_s':wall,'usage_by_role':dict(usage),'all_role_output_tokens':total,

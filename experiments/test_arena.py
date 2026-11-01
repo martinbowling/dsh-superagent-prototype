@@ -6,9 +6,13 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import io
 from summarize import summarize
-from arena import overlay, request, ManagementError
+from arena import overlay, request, ManagementError, run
 from check import bootstrap
 import ast
+from reasoning_gateway import closed_think_prefill, off_prefill_gateway
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+import urllib.request
 
 class ArenaEvidenceTests(unittest.TestCase):
     def fixture(self, root, truncated=False, usage=True):
@@ -46,6 +50,40 @@ class ArenaEvidenceTests(unittest.TestCase):
         source='text = "exec(CHECKS) and exec(compile(SOURCE"\n'
         tree=ast.parse(bootstrap('intervals',source))
         self.assertEqual(ast.literal_eval(tree.body[0].value),source)
+    def test_thinking_on_emits_an_enabled_native_control(self):
+        c={'models':{'m':{'base_url':'http://127.0.0.1:1234/v1','model':'fixture','context_window':32768,'max_tokens':8192}}}
+        row=next(x for x in overlay(c,Path('/tmp/state'),'m','on') if x['id']=='llm-pi-ai')
+        self.assertTrue(row['config']['providers']['arena-m']['compat']['chatTemplateKwargs']['enable_thinking'])
+    def test_unsupported_off_mode_is_refused_before_launch(self):
+        c={'models':{'m':{'context_window':32768,'max_tokens':8192,'thinking_controls':{'off':None}}}}
+        with self.assertRaisesRegex(ValueError,'unavailable'):
+            run(c,'m','m',1,[],Path('/tmp/not-created-by-test'),1,'off')
+    def test_prefill_preserves_the_caller_and_prior_tool_transcript(self):
+        original={'messages':[{'role':'tool','content':'passed'}],'stream':True}
+        result=closed_think_prefill(original)
+        self.assertEqual(len(original['messages']),1)
+        self.assertEqual(result['messages'][-1],{'role':'assistant','content':''})
+        self.assertEqual(result['messages'][0],original['messages'][0])
+        self.assertFalse(result['add_generation_prompt']);self.assertTrue(result['continue_final_message'])
+    def test_loopback_gateway_forwards_the_prefill_and_records_transform(self):
+        class Echo(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                body=self.rfile.read(int(self.headers['Content-Length']))
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Echo)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                log=Path(d)/'transforms.jsonl'
+                c={'models':{'m':{'base_url':f'http://127.0.0.1:{server.server_port}/v1','thinking_off_prefill':True}}}
+                with off_prefill_gateway(c,'off',{'m'},log) as routed:
+                    req=urllib.request.Request(routed['models']['m']['base_url']+'/chat/completions',
+                        data=json.dumps({'messages':[{'role':'user','content':'READY'}]}).encode())
+                    with urllib.request.urlopen(req,timeout=3) as response:body=json.load(response)
+                    self.assertEqual(body['messages'][-1],{'role':'assistant','content':''})
+                    self.assertEqual(json.loads(log.read_text())['mode'],'closed-think-prefill')
+        finally:server.shutdown();server.server_close();thread.join(timeout=2)
     def test_local_overlay_disables_external_sources_and_preserves_preset_identity(self):
         c={'models':{'m':{'base_url':'http://127.0.0.1:1234/v1','model':'fixture','context_window':32768,'max_tokens':4096}}}
         rows={x['id']:x for x in overlay(c,Path('/tmp/arena-state'),'m')}
