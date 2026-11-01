@@ -33,7 +33,7 @@ def summarize(root):
                 if block.get('type')!='text':continue
                 try:value=json.loads(block['text'])
                 except (ValueError,KeyError):continue
-                if isinstance(value,dict) and 'passed_cases' in value:test_results.append({'session':sid,**value})
+                if isinstance(value,dict) and 'passed_cases' in value:test_results.append({'session':sid,'completed_at_ms':event.get('time'),**value})
     tickets=json.loads((root/'tickets.json').read_text()).get('items',[]) if (root/'tickets.json').exists() else []
     final_tests={r['session']:r for r in test_results}
     first_tests={}
@@ -47,6 +47,10 @@ def summarize(root):
     ttft=[(at-started[k]['at'])/1000 for k,at in first.items() if k in started]
     total=sum(v['output_tokens'] for v in usage.values());wall=manifest.get('wall_s')
     accounted=sum(v['requests'] for v in usage.values())
+    origin=manifest.get('work_started')
+    first_at=min((x['completed_at_ms'] for x in test_results if x.get('completed_at_ms') is not None),default=None)
+    final_at=max((x['completed_at_ms'] for x in final_tests.values() if x.get('completed_at_ms') is not None),default=None)
+    final_ready=len(final_tests)==manifest.get('expected_tickets') and all(x['passed'] for x in final_tests.values())
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
     review=json.loads((root/'code-review.json').read_text()) if (root/'code-review.json').exists() else 'pending blind code review; no overall quality score inferred from throughput'
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
@@ -66,6 +70,8 @@ def summarize(root):
       'tool_calls':dict(tools),'max_token_endings':truncated,'test_results':test_results,
       'objective_test_attempts':len(test_results),'first_test_results':list(first_tests.values()),
       'first_attempt_passed_tickets':sum(bool(x['passed']) for x in first_tests.values()),
+      'time_to_first_test_s':first_at/1000-origin if origin and first_at else None,
+      'time_to_final_passing_tests_s':final_at/1000-origin if origin and final_at and final_ready else None,
       'passed':manifest['status']=='finished' and len(successful)==manifest.get('expected_tickets') and not truncated,
       'quality_review':review}
 

@@ -49,10 +49,13 @@ class ArenaEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root);p=root/'state/arena-events.jsonl'
             rows=p.read_text().splitlines();bad=json.loads(rows[-1]);value={'passed':False,'passed_cases':5,'total_cases':11}
+            bad['event']['time']=4000;last=json.loads(rows[-1]);last['event']['time']=8000;rows[-1]=json.dumps(last)
+            m=root/'manifest.json';manifest=json.loads(m.read_text());manifest['work_started']=1;m.write_text(json.dumps(manifest))
             bad['event']['data']['message']['content'][0]['text']=json.dumps(value)
             p.write_text(json.dumps(bad)+'\n'+'\n'.join(rows)+'\n');result=summarize(root)
             self.assertTrue(result['passed']);self.assertEqual(result['objective_test_attempts'],2)
             self.assertEqual(result['first_attempt_passed_tickets'],0)
+            self.assertEqual(result['time_to_first_test_s'],3);self.assertEqual(result['time_to_final_passing_tests_s'],7)
     def test_interrupted_request_never_becomes_a_throughput_claim(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root)
