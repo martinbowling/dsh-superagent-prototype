@@ -6,8 +6,8 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import io
 from summarize import summarize
-from arena import overlay, request, ManagementError, run, harness_port_lock, preflight
-from check import bootstrap
+from arena import overlay, request, ManagementError, run, harness_port_lock, preflight, with_effort, task_file
+from check import bootstrap, CHECKS, CHECKS_V2
 import ast
 from reasoning_gateway import closed_think_prefill, off_prefill_gateway
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +45,14 @@ class ArenaEvidenceTests(unittest.TestCase):
             root=Path(d);self.fixture(root);review={'overall_status':'not_scored','code_quality_component':'reviewed'}
             (root/'code-review.json').write_text(json.dumps(review))
             self.assertEqual(summarize(root)['quality_review'],review)
+    def test_repairs_do_not_hide_first_attempt_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);self.fixture(root);p=root/'state/arena-events.jsonl'
+            rows=p.read_text().splitlines();bad=json.loads(rows[-1]);value={'passed':False,'passed_cases':5,'total_cases':11}
+            bad['event']['data']['message']['content'][0]['text']=json.dumps(value)
+            p.write_text(json.dumps(bad)+'\n'+'\n'.join(rows)+'\n');result=summarize(root)
+            self.assertTrue(result['passed']);self.assertEqual(result['objective_test_attempts'],2)
+            self.assertEqual(result['first_attempt_passed_tickets'],0)
     def test_interrupted_request_never_becomes_a_throughput_claim(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root)
@@ -61,6 +69,19 @@ class ArenaEvidenceTests(unittest.TestCase):
         self.assertTrue(row['config']['providers']['arena-m']['compat']['chatTemplateKwargs']['enable_thinking'])
         off=next(x for x in overlay(c,Path('/tmp/state'),'m','off') if x['id']=='llm-pi-ai')
         self.assertFalse(off['config']['providers']['arena-m']['compat']['chatTemplateKwargs']['enable_thinking'])
+    def test_high_native_effort_preserves_default_config(self):
+        c={'models':{'m':{'supported_reasoning_efforts':['low','high'],'thinking_controls':{'on':{'reasoning_effort':'low'}}}}}
+        high=with_effort(c,{'m'},'on','high')
+        self.assertEqual(high['models']['m']['thinking_controls']['on']['reasoning_effort'],'high')
+        self.assertEqual(c['models']['m']['thinking_controls']['on']['reasoning_effort'],'low')
+        with self.assertRaises(ValueError):with_effort(c,{'m'},'off','high')
+        with self.assertRaises(ValueError):with_effort(c,{'m'},'on','unsupported')
+    def test_versioned_suites_keep_original_tasks_and_match_grader_ids(self):
+        old=json.loads(task_file('v1').read_text());new=json.loads(task_file('v2').read_text())
+        self.assertEqual([x['id'] for x in old],['ledger','intervals','pagination'])
+        self.assertEqual(set(CHECKS),{x['id'] for x in old})
+        self.assertEqual(set(CHECKS_V2),{x['id'] for x in new})
+        self.assertEqual(len(new),5);ast.parse(bootstrap('inventory','def apply_batch(a,b): return a','v2'))
     def test_preflight_rejects_context_larger_than_live_backend(self):
         c={'models':{'m':{'base_url':'http://127.0.0.1:1234/v1','model':'fixture','context_window':262144,'max_tokens':131072}}}
         response=io.BytesIO(json.dumps({'data':[{'id':'fixture','max_model_len':32768}]}).encode())

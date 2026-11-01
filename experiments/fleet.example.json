@@ -13,7 +13,11 @@
       "context_window": 1048576,
       "max_tokens": 131072,
       "backend_concurrency": 4,
-      "hardware": "Record actual hosts, quantization, engine revision and interconnect"
+      "hardware": "Record actual hosts, quantization, engine revision and interconnect",
+      "supported_reasoning_efforts": [
+        "low",
+        "high"
+      ]
     },
     "glm": {
       "base_url": "http://127.0.0.1:18000/v1",
@@ -22,11 +26,20 @@
       "max_tokens": 131072,
       "backend_concurrency": 1,
       "thinking_controls": {
-        "on": {"reasoning_effort": "low"},
-        "off": {"reasoning_effort": "low", "enable_thinking": false}
+        "on": {
+          "reasoning_effort": "low"
+        },
+        "off": {
+          "reasoning_effort": "low",
+          "enable_thinking": false
+        }
       },
       "thinking_off_prefill": true,
-      "hardware": "Record actual hosts, quantization and backend limits"
+      "hardware": "Record actual hosts, quantization and backend limits",
+      "supported_reasoning_efforts": [
+        "low",
+        "high"
+      ]
     },
     "qwen": {
       "base_url": "http://127.0.0.1:18889/v1",

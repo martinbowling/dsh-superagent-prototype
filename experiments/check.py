@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import uuid
+from checks_v2 import v2_checks
 
 CHECKS = {
  'ledger': '''
@@ -61,8 +62,11 @@ check('preserves input',lambda:(f(x),eq(x,before)))
 '''
 }
 
-def bootstrap(task, source):
-    return 'SOURCE='+repr(source)+'\nCHECKS='+repr(CHECKS[task])+'''\nimport json,copy,contextlib,io
+CHECKS_V2=v2_checks(CHECKS)
+
+def bootstrap(task, source, suite='v1'):
+    checks=CHECKS if suite=='v1' else CHECKS_V2
+    return 'SOURCE='+repr(source)+'\nCHECKS='+repr(checks[task])+'''\nimport json,copy,contextlib,io
 rows=[]
 def eq(a,b):
     assert a==b, f'{a!r} != {b!r}'
@@ -82,7 +86,7 @@ except BaseException as e: rows.append({'name':'load','passed':False,'error':str
 print(json.dumps({'passed':bool(rows) and all(r['passed'] for r in rows),'passed_cases':sum(r['passed'] for r in rows),'total_cases':len(rows),'cases':rows}))
 '''
 
-def run(task, source):
+def run(task, source, suite='v1'):
     host = os.environ.get('ARENA_DOCKER_SSH', '')
     if host and not re.fullmatch(r'[A-Za-z0-9_.@-]+',host): raise ValueError('Invalid Docker SSH alias')
     image = os.environ.get('ARENA_PYTHON_IMAGE','python:3.12-alpine')
@@ -93,7 +97,7 @@ def run(task, source):
           '--security-opt=no-new-privileges','--pids-limit=32','--memory=256m','--memory-swap=256m','--cpus=1',
           '--user=65534:65534','--tmpfs=/tmp:rw,noexec,nosuid,size=16m',image,'python','-I','-S','-']
     try:
-        r=subprocess.run(command(argv),input=bootstrap(task,source),text=True,capture_output=True,timeout=12)
+        r=subprocess.run(command(argv),input=bootstrap(task,source,suite),text=True,capture_output=True,timeout=12)
         if r.returncode: return {'passed':False,'infrastructure_error':r.stderr[-1200:]}
         return json.loads(r.stdout)
     except subprocess.TimeoutExpired:return {'passed':False,'error':'test container exceeded 12-second limit'}
@@ -103,6 +107,8 @@ def run(task, source):
 if __name__=='__main__':
     def cancelled(_signal,_frame):raise RuntimeError('Test driver was cancelled')
     signal.signal(signal.SIGTERM,cancelled)
-    p=argparse.ArgumentParser();p.add_argument('--task',choices=CHECKS,required=True);a=p.parse_args()
-    try: print(json.dumps(run(a.task,json.load(sys.stdin)['source'])))
+    p=argparse.ArgumentParser();p.add_argument('--task',choices=CHECKS_V2,required=True)
+    p.add_argument('--suite',choices=['v1','v2'],default=os.environ.get('DSH_ARENA_SUITE','v1'));a=p.parse_args()
+    if a.task not in (CHECKS if a.suite=='v1' else CHECKS_V2):p.error('Task is not part of this suite')
+    try: print(json.dumps(run(a.task,json.load(sys.stdin)['source'],a.suite)))
     except Exception as e: print(json.dumps({'passed':False,'infrastructure_error':str(e)[:1200]}))

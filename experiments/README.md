@@ -2,7 +2,7 @@
 
 This fork adds an opt-in local-fixture Source to **the real superagent runtime**. The original coordinator routes explicit tasks into Tickets, the original Executor starts worker Sessions and enforces worker slots, the worker writes and tests an artifact, and the normal Report/outbox path returns the result to a local JSONL file. This is not a replacement chat-completions loop.
 
-New experiment runs default to **reasoning on** with the configured 131,072-token output ceiling. GLM uses its native low reasoning setting. Pass `--thinking off` explicitly for the comparison arm; its GLM prefill behavior remains separately labeled in the manifest.
+New experiment runs default to **reasoning on**, **suite v2**, and the configured 131,072-token output ceiling. GLM uses its native low reasoning setting. Pass `--thinking off` explicitly for the comparison arm; its GLM prefill behavior remains separately labeled in the manifest.
 
 Production defaults are unchanged. `localFixtures: true` skips account setup, refuses enabled external Sources, blocks the command transport, confines ticket directories under the new state root, and restricts workers to `arena_read`, `arena_write`, and `arena_test`. Router Sessions receive only their own orchestration tools. The local fixture Source is disabled in the default bundle. There are no automatic GPU restarts, publications, messages, merges, model downloads or boot changes.
 
@@ -15,6 +15,14 @@ Production defaults are unchanged. `localFixtures: true` skips account setup, re
 5. **Reasoning on/off:** repeat identical fixtures and output reservations with `--thinking off` and `--thinking on`. The primary ceiling is **131,072 output tokens per request**. The GLM example requires a backend configured for 262,144 total context; its older 32,768-context recovery profile must be resized first or use a smaller output reservation. That smaller cap prevents a strictly budget-matched cross-model ranking. Model-specific template controls are recorded in each manifest. Reasoning tokens count against the reservation. A ceiling does not require the model to generate that many tokens, and a short successful task does not validate sustained 128K generation. The runner checks advertised context when available; it does not resize or restart the backend.
 
 The first pilot is an integration check. It cannot establish a quality winner or validate the earlier theoretical four-Spark throughput estimates. TP2-replica versus TP4 deployment is a separate experiment requiring real backend changes and rollback, which these scripts do not perform.
+
+## Versioned fixtures and higher effort
+
+Suite v1 preserves the original three prompts and 35 cases (`--suite v1`). Suite v2 has five tasks and 242 checks: ledger 51, intervals 49, pagination 37, dependency ordering 46, and transactional inventory 59. It clarifies previously ambiguous inputs and adds fixed-seed property checks, cycles, lexicographic frontier ordering, duplicate operations, deep-copy isolation and atomic failure. V1 and v2 scores must stay separate. The five v2 graders passed independently authored reference implementations in isolated containers before model trials.
+
+Use `--reasoning-effort low` or `--reasoning-effort high` with thinking on and a model listed as supporting that native effort. Both modes retain the 128K ceiling; effort is not the token limit. GLM native high is a distinct template control from its default low. Manifests record the exact kwargs, suite, checker hash and copied grader files so a long run cannot silently pick up an edited grader. Unknown efforts are refused.
+
+For the new two-task comparison, run both efforts with `--suite v2 --tasks dependencies,inventory --workers 1 --max-tokens 131072`. That is 105 checks per arm. Use fresh output paths, counterbalance effort order, and keep hardware and deadline fixed. The pilot uses a 900-second workflow deadline; a wall-time cutoff is incomplete even though the output reservation is larger. `summarize.py` reports first-attempt success separately from final passing tests and repair attempts.
 
 ## Same rubric
 
@@ -52,7 +60,7 @@ python3 experiments/arena.py run --config /private/fleet.json \
   --output /private/runs/mixed-r1
 python3 experiments/arena.py run --config /private/fleet.json \
   --coordinator blackfold --worker blackfold --workers 1 \
-  --tasks intervals --thinking on --max-tokens 131072 \
+  --tasks dependencies,inventory --thinking on --reasoning-effort high --max-tokens 131072 --timeout 900 \
   --output /private/runs/blackfold-thinking-on-r1
 python3 experiments/summarize.py /private/runs/blackfold-r1 /private/runs/mixed-r1
 ```

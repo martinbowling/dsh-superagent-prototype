@@ -36,6 +36,8 @@ def summarize(root):
                 if isinstance(value,dict) and 'passed_cases' in value:test_results.append({'session':sid,**value})
     tickets=json.loads((root/'tickets.json').read_text()).get('items',[]) if (root/'tickets.json').exists() else []
     final_tests={r['session']:r for r in test_results}
+    first_tests={}
+    for r in test_results:first_tests.setdefault(r['session'],r)
     successful=[t for t in tickets if t.get('state')=='ended' and t.get('ended',{}).get('outcome')=='completed'
                 and final_tests.get(t.get('sessionId'),{}).get('passed')]
     started={r['id']:r for r in calls if r['phase']=='start'}
@@ -48,6 +50,8 @@ def summarize(root):
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
     review=json.loads((root/'code-review.json').read_text()) if (root/'code-review.json').exists() else 'pending blind code review; no overall quality score inferred from throughput'
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
+      'fixture_suite':manifest.get('fixture_suite','v1'),'reasoning_effort':manifest.get('reasoning_effort'),
+      'checker_sha256':manifest.get('checker_sha256'),
       'thinking_mode':manifest.get('requested_thinking_mode'),'thinking_controls':manifest.get('thinking_controls'),
       'thinking_transport':manifest.get('thinking_transport'),
       'worker_count':manifest['workers'],'fixture_sha256':manifest['fixture_sha256'],
@@ -60,6 +64,8 @@ def summarize(root):
       'request_latency_median_s':statistics.median(latency) if latency else None,
       'first_delta_median_s':statistics.median(ttft) if ttft else None,
       'tool_calls':dict(tools),'max_token_endings':truncated,'test_results':test_results,
+      'objective_test_attempts':len(test_results),'first_test_results':list(first_tests.values()),
+      'first_attempt_passed_tickets':sum(bool(x['passed']) for x in first_tests.values()),
       'passed':manifest['status']=='finished' and len(successful)==manifest.get('expected_tickets') and not truncated,
       'quality_review':review}
 

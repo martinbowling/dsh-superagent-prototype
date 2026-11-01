@@ -55,9 +55,13 @@ def save(base,block,value):
     else:revision=settings['blocks'][block]['revision']
     return request(base,'settings/'+block,{'value':value,'revision':revision},method='PUT')
 
-def plan(config):
+def task_file(suite):
+    if suite not in ('v1','v2'):raise ValueError('Unknown fixture suite')
+    return ROOT/('tasks.json' if suite=='v1' else 'tasks-v2.json')
+
+def plan(config,suite='v2'):
     available=list(config['models'])
-    return {'schema':1,'tasks':[t['id'] for t in json.loads((ROOT/'tasks.json').read_text())],
+    return {'schema':2,'fixture_suite':suite,'tasks':[t['id'] for t in json.loads(task_file(suite).read_text())],
       'experiments':[
         {'id':'solo','coordinators':available,'workers':available,'worker_counts':[1],'repeats':3},
         {'id':'scaling','homogeneous_models':available,'worker_counts':[1,2,4,8],'repeats':3},
@@ -65,6 +69,7 @@ def plan(config):
         {'id':'output-budget','models':available,'budgets':[8192,32768,65536,131072],
          'gate':'Only budgets that fit the backend context with measured prompt headroom; stop on repeated output.'}],
       'reasoning_experiment':{'default_mode':DEFAULT_THINKING,'modes':['off','on'],'repeats':3,
+        'native_efforts':['low','high'],
         'gate':'Verify native template controls. Unsupported modes are unavailable, not relabeled. Keep tasks and output reservations identical.'},
       'metrics':['objective test pass rate','completed tickets per minute','wall latency p50/p95','all-role output tokens per second',
                  'per-role prompt/output tokens','tool failures','max-token endings','actual peak model requests'],
@@ -77,6 +82,19 @@ def plan(config):
 def thinking_kwargs(model,mode):
     controls=model.get('thinking_controls',{'off':{'enable_thinking':False},'on':{'enable_thinking':True}})
     return controls.get(mode)
+
+def with_effort(config,names,thinking,effort):
+    result=copy.deepcopy(config)
+    if effort is None:return result
+    if thinking!='on':raise ValueError('A native reasoning effort requires thinking=on')
+    for name in names:
+        model=result['models'][name]
+        if effort not in model.get('supported_reasoning_efforts',[]):
+            raise ValueError(f'{name} has no verified native {effort} reasoning control')
+        controls=copy.deepcopy(model.get('thinking_controls',{'off':{'enable_thinking':False},'on':{'enable_thinking':True}}))
+        controls['on']={**(controls['on'] or {}),'reasoning_effort':effort}
+        model['thinking_controls']=controls
+    return result
 
 def overlay(config,state,coordinator,thinking=DEFAULT_THINKING):
     providers={}
@@ -110,7 +128,8 @@ def harness_port_lock(config):
         yield
     finally:os.close(fd)
 
-def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING):
+def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None):
+    config=with_effort(config,{coordinator,worker},thinking,effort)
     for name in {coordinator,worker}:
         model=config['models'][name]
         if not 0<model['max_tokens']<model['context_window']:
@@ -122,15 +141,17 @@ def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_TH
     if unavailable:raise RuntimeError('Selected backend unavailable or incompatible: '+json.dumps(unavailable))
     with harness_port_lock(config):
         with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
-            return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
+            return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking,suite,effort)
 
-def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING):
+def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None):
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',config.get('port',3086)))==0:raise RuntimeError('Dedicated Harness port is already in use; no process was changed')
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
     state=output/'state';state.mkdir()
-    run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}'
-    selected=[t for t in json.loads((ROOT/'tasks.json').read_text()) if not tasks or t['id'] in tasks]
+    grader=output/'grader';grader.mkdir()
+    for name in ('check.py','checks_v2.py'):shutil.copy2(ROOT/name,grader/name)
+    run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}-{effort or "native"}-{suite}'
+    selected=[t for t in json.loads(task_file(suite).read_text()) if not tasks or t['id'] in tasks]
     if not selected:raise ValueError('No matching tasks')
     # At least count tickets for a scaling run; names remain disjoint and deterministic.
     fixtures=[]
@@ -141,6 +162,8 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
         'models':config['models'],'fixture_sha256':hashlib.sha256(encoded).hexdigest(),
         'dsh_version':config.get('dsh_version'),'upstream_revision':config.get('upstream_revision'),
         'started':time.time(),'status':'starting','scope':'real superagent local fixture tickets'}
+    manifest.update(fixture_suite=suite,reasoning_effort=effort,
+        checker_sha256=hashlib.sha256((grader/'check.py').read_bytes()+(grader/'checks_v2.py').read_bytes()).hexdigest())
     manifest['requested_thinking_mode']=thinking
     manifest['thinking_controls']={name:thinking_kwargs(config['models'][name],thinking) for name in {coordinator,worker}}
     manifest['thinking_transport']={name:'closed-think-prefill' if thinking=='off' and config['models'][name].get('thinking_off_prefill') else 'native-template-kwargs' for name in {coordinator,worker}}
@@ -154,7 +177,8 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
         if (template/name).exists():shutil.copy2(template/name,target/name)
     (target/'node_modules').symlink_to(template/'node_modules',target_is_directory=True)
     env=os.environ.copy();env.update(DSH_HOME=str(home),ARENA_LOCAL_KEY='local-only',
-      DSH_ARENA_TEST_DRIVER=str(ROOT/'check.py'),ARENA_DOCKER_SSH=config.get('docker_ssh',''),
+      DSH_ARENA_TEST_DRIVER=str(grader/'check.py'),ARENA_DOCKER_SSH=config.get('docker_ssh',''),
+      DSH_ARENA_SUITE=suite,
       ARENA_PYTHON_IMAGE=config.get('python_image','python:3.12-alpine'))
     base=f'http://127.0.0.1:{config.get("port",3086)}'
     command=[config['dsh_bin'],'--profile',config.get('profile','arena'),'--patch',str(patch),'--no-open']
@@ -237,13 +261,14 @@ if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('action',choices=['plan','preflight','run']);p.add_argument('--config',type=Path,required=True)
     p.add_argument('--coordinator',default='blackfold');p.add_argument('--worker',default='blackfold')
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
-    p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=600)
-    p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int);a=p.parse_args()
+    p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=900)
+    p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int)
+    p.add_argument('--suite',choices=['v1','v2'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high']);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:
         for name in {a.coordinator,a.worker}:c['models'][name]['max_tokens']=a.max_tokens
-    if a.action=='plan':print(json.dumps(plan(c),indent=2))
+    if a.action=='plan':print(json.dumps(plan(c,a.suite),indent=2))
     elif a.action=='preflight':print(json.dumps(preflight(c),indent=2))
     else:
         if not a.output:p.error('--output is required for a run')
-        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout,a.thinking),indent=2))
+        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout,a.thinking,a.suite,a.reasoning_effort),indent=2))

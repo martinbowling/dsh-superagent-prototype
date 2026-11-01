@@ -127,7 +127,7 @@ export function apply(ctx: Context): void {
         const child = spawn('python3', [driver, '--task', task.id.split('--')[0]!], {
           stdio: ['pipe', 'pipe', 'pipe'], signal: AbortSignal.any([exec.signal, AbortSignal.timeout(25000)]) })
         let stdout = '', stderr = ''
-        child.stdout.on('data', b => { stdout = (stdout + b).slice(-12000) })
+        child.stdout.on('data', b => { stdout = (stdout + b).slice(-64000) })
         child.stderr.on('data', b => { stderr = (stderr + b).slice(-2000) })
         child.on('error', reject)
         child.on('close', code => { try { resolve(JSON.parse(stdout)) } catch { reject(new Error(`Test driver ${code}: ${stderr}`)) } })

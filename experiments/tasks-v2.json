@@ -1,0 +1,37 @@
+[
+  {
+    "id": "ledger",
+    "prompt": "Implement summarize(events) in solution.py. events must be a list or tuple of dictionaries with nonempty string id/account, type credit/debit, and ASCII nonnegative decimal-string amount: one or more digits, optionally a decimal point followed by one or two digits. Leading zeros are valid. Reject whitespace/newlines, signs, exponents, non-ASCII digits, bool/non-string amounts, empty ids/accounts, missing fields and unsupported types with ValueError. Return integer-cent account balances without floating point rounding, including large amounts and negative balances. Credit adds; debit subtracts. Repeated ids count once only if the four required field values are exactly equal (1.0 versus 1.00 conflicts). Conflicting id reuse raises ValueError. Preserve inputs. Inspect with arena_read, implement solution.py with arena_write, run arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {
+      "ledger.py": "def summarize(events):\n    out = {}\n    for event in events:\n        out[event['account']] = out.get(event['account'], 0) + int(float(event['amount']) * 100)\n    return out\n"
+    }
+  },
+  {
+    "id": "intervals",
+    "prompt": "Implement merge_intervals(items) in solution.py. items must be a list; every pair must be a two-element list or tuple. Endpoints must be finite int or float values; bool is invalid. Arbitrarily large Python integers are valid and must not be converted to floats. Return sorted tuples merging overlaps and touching intervals; discard zero-length intervals. Reject malformed pair containers (including mappings and sets), inverted pairs, nonnumeric/nonfinite endpoints, and invalid outer input with ValueError. Preserve inputs. Inspect with arena_read, implement solution.py with arena_write, run arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {
+      "intervals.py": "def merge_intervals(items):\n    return sorted(items)\n"
+    }
+  },
+  {
+    "id": "pagination",
+    "prompt": "Implement paginate(items, cursor=None, limit=20) in solution.py. items must be an ordered list (None is invalid) of dictionaries with unique nonempty string ids. Return {items: selected_items, next_cursor: last_selected_id_if_more_remain_else_None}. None cursor starts at beginning; an existing string id starts after that item. Preserve order and inputs. Validate the entire list even beyond the requested page. Reject absent/invalid cursors, malformed/duplicate ids or items, invalid outer input, and limits that are not integers 1..100 (including bool) with ValueError. Empty list with None cursor returns empty page. Repeated page walks must terminate without skipping/duplicating entries. Inspect with arena_read, implement solution.py with arena_write, run arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {
+      "pagination.py": "def paginate(items, cursor=None, limit=20):\n    return {'items': items[:limit], 'next_cursor': None}\n"
+    }
+  },
+  {
+    "id": "dependencies",
+    "prompt": "Implement dependency_order(jobs) in solution.py. jobs is a dict mapping nonempty string job ids to lists of distinct nonempty string prerequisite ids. Every dependency must name a job in jobs. Return the lexicographically smallest valid topological ordering of all jobs: at every step choose the smallest currently available id, including ids newly unlocked by the previous step. Detect cycles, including disconnected cycles and self dependencies, and raise ValueError. Reject duplicate/unknown dependencies, malformed input/ids/dependency lists (list required, not tuple/set/string), and non-string ids with ValueError. Empty dict returns []. Preserve every input collection. Inspect with arena_read, implement solution.py with arena_write, run arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {
+      "dependencies.py": "def dependency_order(jobs):\n    return sorted(jobs)\n"
+    }
+  },
+  {
+    "id": "inventory",
+    "prompt": "Implement apply_batch(state, operations) in solution.py. state is a dict mapping nonempty string SKUs to dicts with EXACT keys stock and reserved, both non-bool integers satisfying 0 <= reserved <= stock. operations must be a list of dicts with EXACT keys id, sku, kind, qty: id and sku are nonempty strings, sku must exist in state, qty is a positive non-bool integer, and kind is restock/reserve/release/ship. Execute in list order: restock increases stock; reserve increases reserved only if stock-reserved >= qty; release decreases reserved only if reserved >= qty; ship decreases stock and reserved only if reserved >= qty. Repeated operation ids count once only when all four fields exactly match; conflicting reuse raises ValueError. Raise ValueError for any malformed state/operation, invalid collection/type, unknown SKU or insufficient stock/reservations. Apply the batch atomically: never mutate state or operations, including on a late failure. Return a completely independent nested dict, even for an empty batch. Empty state with empty batch returns {}. Inspect with arena_read, implement solution.py with arena_write, run arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {
+      "inventory.py": "def apply_batch(state, operations):\n    return state\n"
+    }
+  }
+]
