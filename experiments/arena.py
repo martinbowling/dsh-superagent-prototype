@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from reasoning_gateway import off_prefill_gateway
 
 ROOT=Path(__file__).resolve().parent
+DEFAULT_THINKING='on'
 
 class ManagementError(RuntimeError):
     def __init__(self,status,message):
@@ -63,7 +64,7 @@ def plan(config):
         {'id':'mixed-roles','coordinator_worker_pairs':[[a,b] for a in available for b in available if a!=b],'worker_counts':[2,4],'repeats':3},
         {'id':'output-budget','models':available,'budgets':[8192,32768,65536,131072],
          'gate':'Only budgets that fit the backend context with measured prompt headroom; stop on repeated output.'}],
-      'reasoning_experiment':{'modes':['off','on'],'repeats':3,
+      'reasoning_experiment':{'default_mode':DEFAULT_THINKING,'modes':['off','on'],'repeats':3,
         'gate':'Verify native template controls. Unsupported modes are unavailable, not relabeled. Keep tasks and output reservations identical.'},
       'metrics':['objective test pass rate','completed tickets per minute','wall latency p50/p95','all-role output tokens per second',
                  'per-role prompt/output tokens','tool failures','max-token endings','actual peak model requests'],
@@ -77,7 +78,7 @@ def thinking_kwargs(model,mode):
     controls=model.get('thinking_controls',{'off':{'enable_thinking':False},'on':{'enable_thinking':True}})
     return controls.get(mode)
 
-def overlay(config,state,coordinator,thinking='off'):
+def overlay(config,state,coordinator,thinking=DEFAULT_THINKING):
     providers={}
     for name,m in config['models'].items():
         providers['arena-'+name]={'api':'openai-completions','baseURL':m['base_url'],'apiKeyEnv':'ARENA_LOCAL_KEY',
@@ -109,7 +110,7 @@ def harness_port_lock(config):
         yield
     finally:os.close(fd)
 
-def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
+def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING):
     for name in {coordinator,worker}:
         model=config['models'][name]
         if not 0<model['max_tokens']<model['context_window']:
@@ -123,7 +124,7 @@ def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
         with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
             return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
 
-def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
+def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING):
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',config.get('port',3086)))==0:raise RuntimeError('Dedicated Harness port is already in use; no process was changed')
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
@@ -237,7 +238,7 @@ if __name__=='__main__':
     p.add_argument('--coordinator',default='blackfold');p.add_argument('--worker',default='blackfold')
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
     p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=600)
-    p.add_argument('--thinking',choices=['off','on'],default='off');p.add_argument('--max-tokens',type=int);a=p.parse_args()
+    p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:
         for name in {a.coordinator,a.worker}:c['models'][name]['max_tokens']=a.max_tokens

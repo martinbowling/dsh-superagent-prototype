@@ -2,6 +2,8 @@
 
 This fork adds an opt-in local-fixture Source to **the real superagent runtime**. The original coordinator routes explicit tasks into Tickets, the original Executor starts worker Sessions and enforces worker slots, the worker writes and tests an artifact, and the normal Report/outbox path returns the result to a local JSONL file. This is not a replacement chat-completions loop.
 
+New experiment runs default to **reasoning on** with the configured 131,072-token output ceiling. GLM uses its native low reasoning setting. Pass `--thinking off` explicitly for the comparison arm; its GLM prefill behavior remains separately labeled in the manifest.
+
 Production defaults are unchanged. `localFixtures: true` skips account setup, refuses enabled external Sources, blocks the command transport, confines ticket directories under the new state root, and restricts workers to `arena_read`, `arena_write`, and `arena_test`. Router Sessions receive only their own orchestration tools. The local fixture Source is disabled in the default bundle. There are no automatic GPU restarts, publications, messages, merges, model downloads or boot changes.
 
 ## Experiments
