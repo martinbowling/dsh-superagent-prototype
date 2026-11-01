@@ -32,6 +32,8 @@ Read the numbered documents in order; each builds only on the ones before it.
 
 ## Development
 
+This fork includes [local multi-model experiments](experiments/README.md) for isolated BLACKFOLD, GLM and Qwen comparisons, with local fixture intake and a common rubric. The experiment mode is opt-in and does not change the default GitHub/Feishu workflow.
+
 `pnpm check` runs the typecheck, the tests and the build.
 
 ## License

@@ -67,7 +67,7 @@ export interface ExecutorHost {
   readonly effects: Pick<Effects, 'enqueue' | 'handle'>
   /** The `worker` health entry, which reports whether background worker event handling failed. */
   readonly health: HealthEntry
-  readonly machine: Pick<Machine, 'stateDir'>
+  readonly machine: Pick<Machine, 'stateDir' | 'localFixtures'>
   readonly lifetime: AbortSignal
   /** Session manager for worker sessions and for relaying worker reports to the main Session. */
   readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
@@ -246,6 +246,15 @@ export class DshExecutor implements Executor {
    */
   private async prepareDirectory(ticket: Ticket): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
+    if (this.host.machine.localFixtures) {
+      const { resolve, relative, isAbsolute } = await import('node:path')
+      const root = resolve(this.host.machine.stateDir, 'work')
+      const rel = relative(root, resolve(directory))
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new PrepareFailed('Fixture workspace must be inside stateDir/work')
+      if (this.host.store.settings().executor.prepare) throw new PrepareFailed('Fixture mode does not execute prepare commands')
+      await mkdir(directory, { recursive: true })
+      return
+    }
     await mkdir(dirname(directory), { recursive: true })
     const command = this.host.store.settings().executor.prepare.trim()
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))

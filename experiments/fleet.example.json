@@ -1,0 +1,35 @@
+{
+  "dsh_bin": "dsh",
+  "dsh_home": "/absolute/path/to/dedicated-experiment-home",
+  "profile": "arena",
+  "port": 3086,
+  "dsh_version": "0.2.1-rc.3",
+  "docker_ssh": "",
+  "python_image": "python:3.12-alpine",
+  "models": {
+    "blackfold": {
+      "base_url": "http://127.0.0.1:18888/v1",
+      "model": "DeepSeek-1017-BLACKFOLD",
+      "context_window": 1048576,
+      "max_tokens": 4096,
+      "backend_concurrency": 4,
+      "hardware": "Record actual hosts, quantization, engine revision and interconnect"
+    },
+    "glm": {
+      "base_url": "http://127.0.0.1:18000/v1",
+      "model": "nvidia/GLM-5.3-Flash-FP4-Local",
+      "context_window": 32768,
+      "max_tokens": 4096,
+      "backend_concurrency": 1,
+      "hardware": "Record actual hosts, quantization and backend limits"
+    },
+    "qwen": {
+      "base_url": "http://127.0.0.1:11434/v1",
+      "model": "qwen3.5:9b-mlx",
+      "context_window": 32768,
+      "max_tokens": 4096,
+      "backend_concurrency": 1,
+      "hardware": "Example small-model arm; replace with the exact Qwen checkpoint actually served"
+    }
+  }
+}

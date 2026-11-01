@@ -75,6 +75,12 @@ export class Setup {
   }
   private async resolve(settings: Settings): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
+    if (machine.localFixtures) {
+      if (Object.entries(settings.sources).some(([id, source]) => id !== 'fixtures' && source.enabled)) {
+        throw new Error('Local fixture mode requires every external Source to be disabled')
+      }
+      return { ...machine, repository: 'local/fixtures', github: { cli: '/usr/bin/false', login: 'local-fixtures', noreply: 'fixtures@invalid.local' } }
+    }
     const probe = this.probe()
     const deployment = await resolveDeployment(machine, settings.sources.github?.config, probe)
     const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {

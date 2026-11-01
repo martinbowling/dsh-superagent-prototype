@@ -3,3 +3,8 @@ lib/
 .artifacts/
 .env
 coverage/
+__pycache__/
+*.pyc
+fleet.local.json
+.arena-home/
+.arena-runs/
