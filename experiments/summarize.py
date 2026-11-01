@@ -46,6 +46,7 @@ def summarize(root):
     total=sum(v['output_tokens'] for v in usage.values());wall=manifest.get('wall_s')
     accounted=sum(v['requests'] for v in usage.values())
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
+    review=json.loads((root/'code-review.json').read_text()) if (root/'code-review.json').exists() else 'pending blind code review; no overall quality score inferred from throughput'
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
       'thinking_mode':manifest.get('requested_thinking_mode'),'thinking_controls':manifest.get('thinking_controls'),
       'thinking_transport':manifest.get('thinking_transport'),
@@ -60,7 +61,7 @@ def summarize(root):
       'first_delta_median_s':statistics.median(ttft) if ttft else None,
       'tool_calls':dict(tools),'max_token_endings':truncated,'test_results':test_results,
       'passed':manifest['status']=='finished' and len(successful)==manifest.get('expected_tickets') and not truncated,
-      'quality_review':'pending blind code review; no overall quality score inferred from throughput'}
+      'quality_review':review}
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('runs',type=Path,nargs='+');a=p.parse_args()

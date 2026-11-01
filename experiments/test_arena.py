@@ -40,6 +40,11 @@ class ArenaEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root,usage=False);r=summarize(root)
             self.assertFalse(r['usage_complete']);self.assertIsNone(r['all_role_output_tokens_per_wall_second'])
+    def test_manual_review_is_preserved_when_resummarizing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);self.fixture(root);review={'overall_status':'not_scored','code_quality_component':'reviewed'}
+            (root/'code-review.json').write_text(json.dumps(review))
+            self.assertEqual(summarize(root)['quality_review'],review)
     def test_interrupted_request_never_becomes_a_throughput_claim(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root)
