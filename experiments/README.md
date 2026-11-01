@@ -10,7 +10,7 @@ Production defaults are unchanged. `localFixtures: true` skips account setup, re
 2. **Worker scaling:** repeat each homogeneous team with 1, 2, 4 and 8 worker slots. Record in-flight requests and latency; add queue delay only if backend telemetry supplies it. Eight worker slots do not imply eight simultaneous GPU decodes.
 3. **Mixed roles:** compare GLM coordinator → BLACKFOLD workers, BLACKFOLD coordinator → Qwen workers, and the other ordered pairs. The upstream role-model mechanism supplies routing; every run uses fresh model selections and session history. This measures different coordinator/worker models, not a dynamically routed mixture within one worker pool. Nested helpers are disabled in this controlled suite.
 4. **Output budget:** compare 8K, 32K, 64K and 128K ceilings only where the backend's measured context has sufficient room. A 32K-context GLM service cannot be given a 128K output reservation. Record truncation and loops; never mark a cutoff as a successful task.
-5. **Reasoning on/off:** repeat identical fixtures and output reservations with `--thinking off` and `--thinking on`. Start with `--tasks intervals --max-tokens 8192`. Model-specific template controls are recorded in each manifest. Reasoning tokens count against the reservation.
+5. **Reasoning on/off:** repeat identical fixtures and output reservations with `--thinking off` and `--thinking on`. The primary BLACKFOLD ceiling is **131,072 output tokens per request**. The retained 32,768-context GLM service instead uses 16,384 output tokens to leave prompt room; that cap difference prevents a strictly budget-matched cross-model ranking. Model-specific template controls are recorded in each manifest. Reasoning tokens count against the reservation. A ceiling does not require the model to generate that many tokens, and a short successful task does not validate sustained 128K generation.
 
 The first pilot is an integration check. It cannot establish a quality winner or validate the earlier theoretical four-Spark throughput estimates. TP2-replica versus TP4 deployment is a separate experiment requiring real backend changes and rollback, which these scripts do not perform.
 
@@ -50,7 +50,7 @@ python3 experiments/arena.py run --config /private/fleet.json \
   --output /private/runs/mixed-r1
 python3 experiments/arena.py run --config /private/fleet.json \
   --coordinator blackfold --worker blackfold --workers 1 \
-  --tasks intervals --thinking on --max-tokens 8192 \
+  --tasks intervals --thinking on --max-tokens 131072 \
   --output /private/runs/blackfold-thinking-on-r1
 python3 experiments/summarize.py /private/runs/blackfold-r1 /private/runs/mixed-r1
 ```

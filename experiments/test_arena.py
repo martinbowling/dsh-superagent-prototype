@@ -6,7 +6,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import io
 from summarize import summarize
-from arena import overlay, request, ManagementError, run
+from arena import overlay, request, ManagementError, run, harness_port_lock
 from check import bootstrap
 import ast
 from reasoning_gateway import closed_think_prefill, off_prefill_gateway
@@ -58,6 +58,12 @@ class ArenaEvidenceTests(unittest.TestCase):
         c={'models':{'m':{'context_window':32768,'max_tokens':8192,'thinking_controls':{'off':None}}}}
         with self.assertRaisesRegex(ValueError,'unavailable'):
             run(c,'m','m',1,[],Path('/tmp/not-created-by-test'),1,'off')
+    def test_parallel_launches_cannot_claim_the_same_harness_port(self):
+        with tempfile.TemporaryDirectory() as d:
+            config={'dsh_home':d,'port':3086}
+            with harness_port_lock(config):
+                with self.assertRaisesRegex(RuntimeError,'owns this Harness port'):
+                    with harness_port_lock(config):self.fail('second runner entered')
     def test_prefill_preserves_the_caller_and_prior_tool_transcript(self):
         original={'messages':[{'role':'tool','content':'passed'}],'stream':True}
         result=closed_think_prefill(original)

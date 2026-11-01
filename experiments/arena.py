@@ -13,6 +13,8 @@ import time
 import urllib.request
 import urllib.error
 import socket
+import fcntl
+from contextlib import contextmanager
 from reasoning_gateway import off_prefill_gateway
 
 ROOT=Path(__file__).resolve().parent
@@ -93,17 +95,28 @@ def overlay(config,state,coordinator,thinking='off'):
       {'id':'compaction-basic','config':{'headroomTokens':1024,'maxTokens':2048}},
     ]
 
-def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
-    with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
-        return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
+@contextmanager
+def harness_port_lock(config):
+    path=Path(config['dsh_home'])/f'arena-port-{config.get("port",3086)}.lock'
+    fd=os.open(path,os.O_CREAT|os.O_RDWR,0o600)
+    try:
+        try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:raise RuntimeError('Another experiment owns this Harness port; no process was changed')
+        yield
+    finally:os.close(fd)
 
-def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
+def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
     for name in {coordinator,worker}:
         model=config['models'][name]
         if not 0<model['max_tokens']<model['context_window']:
             raise ValueError('Output reservation must leave context room for the prompt')
         if thinking_kwargs(model,thinking) is None:
             raise ValueError(f'{name} has no verified native thinking={thinking} control; this arm is unavailable')
+    with harness_port_lock(config):
+        with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
+            return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
+
+def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',config.get('port',3086)))==0:raise RuntimeError('Dedicated Harness port is already in use; no process was changed')
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
@@ -200,6 +213,9 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking='off
         manifest['expected_tickets']=len(fixtures)
         (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
         return manifest
+    except KeyboardInterrupt:
+        manifest.update(status='interrupted',finished=time.time())
+        (output/'manifest.json').write_text(json.dumps(manifest,indent=2));raise
     except Exception as e:
         manifest.update(status='infrastructure_failed',error=str(e),finished=time.time())
         (output/'manifest.json').write_text(json.dumps(manifest,indent=2));raise
