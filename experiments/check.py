@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import uuid
@@ -100,6 +101,8 @@ def run(task, source):
         subprocess.run(command(['docker','rm','-f',name]),capture_output=True,timeout=6)
 
 if __name__=='__main__':
+    def cancelled(_signal,_frame):raise RuntimeError('Test driver was cancelled')
+    signal.signal(signal.SIGTERM,cancelled)
     p=argparse.ArgumentParser();p.add_argument('--task',choices=CHECKS,required=True);a=p.parse_args()
     try: print(json.dumps(run(a.task,json.load(sys.stdin)['source'])))
     except Exception as e: print(json.dumps({'passed':False,'infrastructure_error':str(e)[:1200]}))
