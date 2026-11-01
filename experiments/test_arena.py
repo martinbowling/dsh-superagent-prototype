@@ -6,7 +6,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import io
 from summarize import summarize
-from arena import overlay, request, ManagementError, run, harness_port_lock
+from arena import overlay, request, ManagementError, run, harness_port_lock, preflight
 from check import bootstrap
 import ast
 from reasoning_gateway import closed_think_prefill, off_prefill_gateway
@@ -54,6 +54,11 @@ class ArenaEvidenceTests(unittest.TestCase):
         c={'models':{'m':{'base_url':'http://127.0.0.1:1234/v1','model':'fixture','context_window':32768,'max_tokens':8192}}}
         row=next(x for x in overlay(c,Path('/tmp/state'),'m','on') if x['id']=='llm-pi-ai')
         self.assertTrue(row['config']['providers']['arena-m']['compat']['chatTemplateKwargs']['enable_thinking'])
+    def test_preflight_rejects_context_larger_than_live_backend(self):
+        c={'models':{'m':{'base_url':'http://127.0.0.1:1234/v1','model':'fixture','context_window':262144,'max_tokens':131072}}}
+        response=io.BytesIO(json.dumps({'data':[{'id':'fixture','max_model_len':32768}]}).encode())
+        with patch('arena.urllib.request.urlopen',return_value=response):r=preflight(c)['m']
+        self.assertFalse(r['available']);self.assertIn('32768',r['error'])
     def test_unsupported_off_mode_is_refused_before_launch(self):
         c={'models':{'m':{'context_window':32768,'max_tokens':8192,'thinking_controls':{'off':None}}}}
         with self.assertRaisesRegex(ValueError,'unavailable'):

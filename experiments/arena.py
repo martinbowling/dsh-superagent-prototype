@@ -30,6 +30,10 @@ def preflight(config):
             if not 0<model['max_tokens']<model['context_window']:raise ValueError('Output reservation must leave context room for the prompt')
             with urllib.request.urlopen(model['base_url'].rstrip('/')+'/models',timeout=5) as r:data=json.load(r)
             ids=[x['id'] for x in data.get('data',[])]
+            served=next((x for x in data.get('data',[]) if x['id']==model['model']),{})
+            advertised=served.get('max_model_len')
+            if isinstance(advertised,int) and model['context_window']>advertised:
+                raise ValueError(f'Configured context exceeds backend-advertised max_model_len={advertised}')
             results[name]={'available':model['model'] in ids,'configured_model':model['model'],'served_models':ids}
         except Exception as e:results[name]={'available':False,'error':str(e)}
     return results
@@ -112,6 +116,9 @@ def run(config,coordinator,worker,count,tasks,output,timeout,thinking='off'):
             raise ValueError('Output reservation must leave context room for the prompt')
         if thinking_kwargs(model,thinking) is None:
             raise ValueError(f'{name} has no verified native thinking={thinking} control; this arm is unavailable')
+    checks=preflight({'models':{name:config['models'][name] for name in {coordinator,worker}}})
+    unavailable={name:check for name,check in checks.items() if not check['available']}
+    if unavailable:raise RuntimeError('Selected backend unavailable or incompatible: '+json.dumps(unavailable))
     with harness_port_lock(config):
         with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
             return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking)
