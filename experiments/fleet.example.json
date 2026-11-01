@@ -24,12 +24,12 @@
       "hardware": "Record actual hosts, quantization and backend limits"
     },
     "qwen": {
-      "base_url": "http://127.0.0.1:11434/v1",
-      "model": "qwen3.5:9b-mlx",
-      "context_window": 32768,
+      "base_url": "http://127.0.0.1:18889/v1",
+      "model": "qwen3.8-flash-next",
+      "context_window": 262144,
       "max_tokens": 4096,
-      "backend_concurrency": 1,
-      "hardware": "Example small-model arm; replace with the exact Qwen checkpoint actually served"
+      "backend_concurrency": 4,
+      "hardware": "Single GB10 NVFP4; verify the actual checkpoint, context, concurrency and endpoint before running"
     }
   }
 }
