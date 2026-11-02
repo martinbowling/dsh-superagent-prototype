@@ -1043,7 +1043,7 @@ describe('feishu event consumer', () => {
    * A bot CLI whose `event consume` behaves as `mode` says: `never` gets ready, `warn` warns once ready, `ready` stays up,
    * and `flaky` exits after its first ready. It records each run and the PID of the latest.
    */
-  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late'): string {
+  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late' | 'ready-after-error'): string {
     const path = join(dir, 'lark-bot')
     writeFileSync(path, `#!/bin/sh
   [ "$1" = event ] || { echo '{"ok":true,"data":{}}'; exit 0; }
@@ -1055,6 +1055,7 @@ describe('feishu event consumer', () => {
     flaky) echo '[event] ready' >&2; [ "$n" -gt 1 ] && exec sleep 60; exit 1 ;;
     events) echo '[event] ready' >&2; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
     late) echo '[event] ready' >&2; sleep 1; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
+    ready-after-error) cat '${dir}/events'; while [ ! -f '${dir}/error-seen' ]; do sleep 0.01; done; echo '[event] ready' >&2; exit 0 ;;
   esac
   `, { mode: 0o755 })
     return path
@@ -1095,6 +1096,24 @@ describe('feishu event consumer', () => {
     expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
     expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
     expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('does not clear a malformed-event error when readiness arrives later on the other pipe', async () => {
+    writeFileSync(join(dir, 'events'), 'not json\n')
+    const { ctx, health, store } = consumerSource(cli('ready-after-error'))
+    const report = ctx.report.bind(ctx)
+    const states: string[] = []
+    vi.spyOn(ctx, 'report').mockImplementation((name, value) => {
+      report(name, value)
+      if (name !== 'feishu') return
+      states.push(value.state)
+      if (value.state === 'error' && value.detail?.includes('JSON')) writeFileSync(join(dir, 'error-seen'), '')
+    })
+    running = runFeishu(ctx, controller.signal)
+    // The CLI waits for the error acknowledgement before emitting readiness.
+    // Its exit diagnostic proves the consumer has handled that readiness line.
+    await vi.waitFor(() => expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('exited (0, ready=true)') }), until)
+    expect(states).not.toContain('ready')
     controller.abort(); await running; store.close()
   }, 20_000)
   it('drops the events it reads once the Source is off', async () => {

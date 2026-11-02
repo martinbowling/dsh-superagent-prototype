@@ -103,7 +103,7 @@ python3 experiments/app_preview.py serve --run /private/runs/app-pilot \
 python3 experiments/app_preview.py stop --state /private/app-preview.json
 ```
 
-Run `python3 -m unittest discover -s experiments -p 'test_*.py'` alongside the repository's TypeScript checks. The CI workflow pins Node and Python and uses two Vitest workers with the original test timeouts. Earlier local timeout failures did not reproduce under that worker limit; no functional regression fix is claimed for them.
+Run `python3 -m unittest discover -s experiments -p 'test_*.py'` alongside the repository's TypeScript checks. The CI workflow pins Node and Python and uses two Vitest workers with the original test timeouts. Earlier local timeout failures did not reproduce under that worker limit; no functional fix is claimed for those timeout failures. CI separately exposed a cross-pipe readiness race in the Feishu consumer: a late stderr ready line could hide a malformed stdout event error. That error now remains visible until a fresh consumer starts. A handshake-based regression forces this ordering and fails against the original source.
 
 ## Completion semantics
 
