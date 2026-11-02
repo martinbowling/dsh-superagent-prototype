@@ -33,7 +33,7 @@ For the new two-task comparison, run both efforts with `--suite v2 --tasks depen
 | Code quality | 15 | Blind manual review: readability, validation, simplicity and maintainability |
 | Scope and reporting | 10 | Preserves input, stays within task, accurately reports its result |
 
-Freeze the rubric, prompts, model revisions and budgets before a scored run. Shuffle model labels for code review. Keep speed separate from quality. If adding a UI app task later, render and interact with each app before giving visual or UX scores; this coding fixture suite does not award visual scores.
+Freeze the rubric, prompts, model revisions and budgets before a scored run. Shuffle model labels for code review. Keep speed separate from quality. The function fixtures do not award visual scores. For app-v1, render and interact with each app before giving visual or UX scores; its structural UI checks alone do not establish visual quality.
 
 ## Setup
 
@@ -76,3 +76,35 @@ Observed request concurrency counts in-flight provider calls, including calls wa
 The retained GLM template ignores `enable_thinking=false`: it always opens a think block, and an absent or unsupported `reasoning_effort` selects maximum effort. The example config uses native `reasoning_effort=low` for on. For off, an explicit `thinking_off_prefill` adapter runs on an ephemeral loopback port, appends an empty assistant message, and sends `continue_final_message=true` with `add_generation_prompt=false`. This template renders that assistant as a closed `<think></think>` prefix. A live READY probe produced reasoning with native low and no reasoning with this prefill. This remains an experimental prompt mode, not a native GLM off switch; verify tool behavior and reasoning leakage in longer runs. No server/template files or model processes are changed. Set a mode's `thinking_controls` to null when it is unsupported; the runner refuses that arm. Older runs that sent only `enable_thinking=false` to this GLM must not be called off-mode evidence.
 
 Model/context/concurrency/quantization differences must remain explicit. A single-GB10 Qwen Next Flash and a multi-node BLACKFOLD or GLM service are a fleet comparison, not a hardware-normalized model benchmark. If Qwen is unavailable, record it as unavailable instead of substituting another model under its label. The example Qwen endpoint is a placeholder SSH-forward port, not evidence of a running service.
+
+## Four-file app fixture and fixed-workload scaling
+
+`--suite app-v1` selects Taskboard: a Python standard-library HTTP app with a SQLite store, HTML template and CSS. Its four allowed files are `app.py`, `store.py`, `templates/index.html` and `static/style.css`, bounded to 64,000 UTF-8 bytes each. The app must build, serve a typed CRUD API and accessible forms, validate input, escape HTML, support literal Unicode search, handle concurrent creates and persist across a restart. The frozen grader has 48 checks. It passed a separately authored reference and rejected a version with HTML escaping removed. Keep app-v1 separate from both function suites.
+
+Workers write through the explicit file allowlist. Every replica has its own full-ticket-id workspace; fixture seeding never overwrites an edit. Compilation, generated Python, HTTP integration tests and SQLite checks all run inside the disposable networkless container. A container-side watchdog owns the execution deadline even if the host driver is interrupted. The generated app never runs on the Mac host.
+
+```sh
+python3 experiments/arena.py run --config /private/fleet.json \
+  --coordinator blackfold --worker blackfold --workers 1 \
+  --suite app-v1 --reasoning-effort low --tickets 1 --timeout 1200 \
+  --output /private/runs/app-pilot
+python3 experiments/matrix.py --config /private/fleet.json --model blackfold \
+  --workers 1,2,4 --repeats 3 --tickets 4 --suite app-v1 \
+  --reasoning-effort low --timeout 1800 --output /private/runs/app-matrix
+```
+
+The matrix holds the workload at four independent app Tickets for every worker count. It counterbalances 1/2/4 order across three rounds, freezes prompt/grader hashes, creates fresh sessions and stops on the first failed or incomplete run without retrying it. This is worker-slot scaling on the configured backend; it does not change TP layout or measure simultaneous GPU decode streams. Do not compare the one-ticket smoke test with four-ticket matrix times as a scaling result.
+
+For an interactive preview, the trusted local proxy relays only app routes into another disposable, networkless container on the configured Docker host. It independently rechecks the saved app with the run's hash-verified frozen grader first. Browser scripts and external resources are blocked, HTML is sanitized, cookies/authorization are not forwarded, and the proxy binds only Mac loopback. The app container expires after one hour. This preview is for functional and visual inspection, not deployment.
+
+```sh
+python3 experiments/app_preview.py serve --run /private/runs/app-pilot \
+  --config /private/fleet.json --state /private/app-preview.json --port 19020
+python3 experiments/app_preview.py stop --state /private/app-preview.json
+```
+
+Run `python3 -m unittest discover -s experiments -p 'test_*.py'` alongside the repository's TypeScript checks. The CI workflow pins Node and Python and uses two Vitest workers with the original test timeouts. Earlier local timeout failures did not reproduce under that worker limit; no functional regression fix is claimed for them.
+
+## Completion semantics
+
+Ticket completion and finished coordinator reporting are separate milestones. Once task jobs end, the runner drains outstanding model calls using the remainder of the original workflow deadline. It ignores incomplete telemetry writes and requires a quiet interval after the last call. A reporting deadline produces `reporting_timeout`, not `finished`. Summaries expose `artifacts_passed` and `workflow_complete`; overall `passed` requires both. Historical artifacts may pass even when their run was cut off during reporting, and must not be presented as a completed workflow.

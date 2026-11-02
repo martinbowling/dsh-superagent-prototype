@@ -6,7 +6,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import io
 from summarize import summarize
-from arena import overlay, request, ManagementError, run, harness_port_lock, preflight, with_effort, task_file
+from arena import overlay, request, ManagementError, run, harness_port_lock, preflight, with_effort, task_file, reporting_idle, drain_reporting, complete_jsonl
 from check import bootstrap, CHECKS, CHECKS_V2
 import ast
 from reasoning_gateway import closed_think_prefill, off_prefill_gateway
@@ -36,6 +36,28 @@ class ArenaEvidenceTests(unittest.TestCase):
     def test_truncation_is_incomplete_even_with_passing_tests(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root,truncated=True);self.assertFalse(summarize(root)['passed'])
+    def test_passing_artifacts_do_not_hide_a_reporting_timeout(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);self.fixture(root);p=root/'manifest.json';m=json.loads(p.read_text())
+            m.update(status='reporting_timeout',reporting_drained=False);p.write_text(json.dumps(m));r=summarize(root)
+            self.assertTrue(r['artifacts_passed']);self.assertFalse(r['workflow_complete']);self.assertFalse(r['passed'])
+    def test_drain_waits_for_a_late_request_and_uses_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);clock=[0.0]
+            def write():
+                rows=[{'id':1,'phase':'start','at':0},{'id':1,'phase':'end','at':1000}]
+                if clock[0]>=1:rows.append({'id':2,'phase':'start','at':1000})
+                if clock[0]>=75:rows.append({'id':2,'phase':'end','at':75000})
+                (root/'arena-calls.jsonl').write_text(''.join(json.dumps(x)+'\n' for x in rows))
+            def sleep(seconds):clock[0]+=seconds;write()
+            write();result=drain_reporting(root,90,0,lambda:True,monotonic=lambda:clock[0],wall=lambda:clock[0],sleep=sleep)
+            self.assertTrue(result);self.assertEqual(clock[0],77)
+    def test_drain_respects_total_deadline_and_partial_append(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);p=root/'arena-calls.jsonl';p.write_text('{"id":1,"phase":"start","at":0}\n{"id":')
+            self.assertEqual(len(complete_jsonl(p)),1);clock=[0.0]
+            result=drain_reporting(root,3,0,lambda:True,monotonic=lambda:clock[0],wall=lambda:clock[0],sleep=lambda n:clock.__setitem__(0,clock[0]+n))
+            self.assertFalse(result);self.assertEqual(clock[0],3)
     def test_missing_usage_never_becomes_a_throughput_claim(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);self.fixture(root,usage=False);r=summarize(root)

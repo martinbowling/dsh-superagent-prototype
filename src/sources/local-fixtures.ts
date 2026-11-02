@@ -1,6 +1,6 @@
 /** Opt-in local experiment intake. It never polls or sends to an external service. */
 import type { Context } from '@deepseek-ai/cordis'
-import { appendFile, readFile, mkdir, writeFile, lstat, realpath } from 'node:fs/promises'
+import { appendFile, readFile, lstat, realpath } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -8,9 +8,11 @@ import { z } from 'zod'
 import { key, type Trigger } from '../core/index.ts'
 import { sourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
+import { FixturePath, readFixtureFiles, seedFixtureFiles, writeFixtureFile } from './fixture-files.ts'
 
 export const Fixture = z.object({ id: z.string().regex(/^[a-z0-9-]{1,80}$/),
-  prompt: z.string().min(1).max(24000), files: z.record(z.string(), z.string()).default({}) }).strict()
+  prompt: z.string().min(1).max(24000), files: z.record(z.string(), z.string()).default({}),
+  writableFiles: z.array(FixturePath).min(1).max(4).refine(paths => new Set(paths).size === paths.length, 'Duplicate output path').optional() }).strict()
 export const FixtureList = z.array(Fixture).max(64).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Duplicate fixture id')
 export type FixtureTask = z.infer<typeof Fixture>
 export function fixtureTrigger(fixture: FixtureTask): Trigger {
@@ -94,44 +96,41 @@ export function apply(ctx: Context): void {
     if (!ticket?.execution || !task) throw new Error('No fixture is assigned to this worker')
     const directory = await realpath(ticket.execution.directory), base = await realpath(join(root, 'work')), rel = relative(base, directory)
     if (!rel || rel.startsWith('..') || isAbsolute(rel) || (await lstat(directory)).isSymbolicLink()) throw new Error('Invalid fixture workspace')
-    return { task, directory }
+    const allowed = task.writableFiles ?? ['solution.py']
+    if (task.writableFiles) await seedFixtureFiles(directory, allowed, task.files)
+    return { task, directory, allowed }
   }
   const output = { schema: { type: 'object' as const, additionalProperties: true },
     render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] }
   const parameters = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
   ctx.tools.register({ name: 'arena_read', description: 'Read the assigned fixture requirements, input files, and current solution.',
     parameters: parameters({}), output, execute: async (_args, exec) => {
-      const { task, directory } = await locate(exec.agent?.id)
-      let solution: string | null = null
-      try { solution = await readFile(join(directory, 'solution.py'), 'utf8') } catch { /* Not written yet. */ }
-      return { fixture: task.id, prompt: task.prompt, files: task.files, solution }
+      const { task, directory, allowed } = await locate(exec.agent?.id)
+      const workspace = await readFixtureFiles(directory, allowed)
+      return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace, solution: workspace['solution.py'] ?? null }
     } })
-  ctx.tools.register({ name: 'arena_write', description: 'Write the complete Python implementation to solution.py in this fixture workspace.',
-    parameters: parameters({ content: { type: 'string', maxLength: 64000 } }, ['content']), output,
+  ctx.tools.register({ name: 'arena_write', description: 'Write a complete allowed output file. path defaults to solution.py; app fixtures list their writableFiles in arena_read.',
+    parameters: parameters({ path: { type: 'string' }, content: { type: 'string', maxLength: 64000 } }, ['content']), output,
     execute: async (value, exec) => {
-      const { content } = z.object({ content: z.string().max(64000) }).strict().parse(value)
-      const { directory } = await locate(exec.agent?.id)
-      await mkdir(directory, { recursive: true })
-      const target = join(directory, 'solution.py')
-      try { if ((await lstat(target)).isSymbolicLink()) throw new Error('Symlink solutions are refused') } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e }
-      await writeFile(target, content, { mode: 0o600 })
-      return { path: 'solution.py', bytes: Buffer.byteLength(content) }
+      const { content, path } = z.object({ content: z.string().max(64000), path: FixturePath.default('solution.py') }).strict().parse(value)
+      const { directory, allowed } = await locate(exec.agent?.id)
+      return { path, bytes: await writeFixtureFile(directory, allowed, path, content) }
     } })
   ctx.tools.register({ name: 'arena_test', description: 'Run the assigned fixture tests in a bounded disposable container and return the result.',
     parameters: parameters({}), output, execute: async (_value, exec) => {
-      const { task, directory } = await locate(exec.agent?.id)
+      const { task, directory, allowed } = await locate(exec.agent?.id)
       const driver = process.env.DSH_ARENA_TEST_DRIVER
       if (!driver) throw new Error('DSH_ARENA_TEST_DRIVER is not configured')
-      const source = await readFile(join(directory, 'solution.py'), 'utf8')
+      const files = await readFixtureFiles(directory, allowed)
       return await new Promise<Record<string, unknown>>((resolve, reject) => {
         const child = spawn('python3', [driver, '--task', task.id.split('--')[0]!], {
-          stdio: ['pipe', 'pipe', 'pipe'], signal: AbortSignal.any([exec.signal, AbortSignal.timeout(25000)]) })
+          stdio: ['pipe', 'pipe', 'pipe'], signal: AbortSignal.any([exec.signal, AbortSignal.timeout(task.writableFiles ? 45000 : 25000)]) })
         let stdout = '', stderr = ''
         child.stdout.on('data', b => { stdout = (stdout + b).slice(-64000) })
         child.stderr.on('data', b => { stderr = (stderr + b).slice(-2000) })
         child.on('error', reject)
         child.on('close', code => { try { resolve(JSON.parse(stdout)) } catch { reject(new Error(`Test driver ${code}: ${stderr}`)) } })
-        child.stdin.end(JSON.stringify({ source }))
+        child.stdin.end(JSON.stringify(task.writableFiles ? { files } : { source: files['solution.py'] }))
       })
     } })
 }

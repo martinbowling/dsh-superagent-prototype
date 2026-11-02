@@ -86,29 +86,51 @@ except BaseException as e: rows.append({'name':'load','passed':False,'error':str
 print(json.dumps({'passed':bool(rows) and all(r['passed'] for r in rows),'passed_cases':sum(r['passed'] for r in rows),'total_cases':len(rows),'cases':rows}))
 '''
 
-def run(task, source, suite='v1'):
+def execute(program, timeout=12):
     host = os.environ.get('ARENA_DOCKER_SSH', '')
     if host and not re.fullmatch(r'[A-Za-z0-9_.@-]+',host): raise ValueError('Invalid Docker SSH alias')
     image = os.environ.get('ARENA_PYTHON_IMAGE','python:3.12-alpine')
     if image.startswith('-'): raise ValueError('Invalid image')
     name='dsharena-'+uuid.uuid4().hex
     def command(args): return ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=5',host,shlex.join(args)] if host else args
+    # PID 1 owns the deadline too: an abruptly killed SSH/host driver cannot
+    # leave generated code running indefinitely on the Docker host.
+    watchdog='''import json,os,signal,subprocess,sys
+source=sys.stdin.read()
+child=subprocess.Popen([sys.executable,'-I','-S','-'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+try:
+ out,err=child.communicate(source,timeout='''+repr(timeout)+''')
+ sys.stdout.write(out);sys.stderr.write(err);sys.exit(child.returncode)
+except subprocess.TimeoutExpired:
+ os.killpg(child.pid,signal.SIGKILL);child.communicate()
+ print(json.dumps({'passed':False,'error':'test container exceeded deadline'}))
+'''
     argv=['docker','run','--pull=never','--rm','-i','--name',name,'--network=none','--read-only','--cap-drop=ALL',
           '--security-opt=no-new-privileges','--pids-limit=32','--memory=256m','--memory-swap=256m','--cpus=1',
-          '--user=65534:65534','--tmpfs=/tmp:rw,noexec,nosuid,size=16m',image,'python','-I','-S','-']
+          '--user=65534:65534','--tmpfs=/tmp:rw,noexec,nosuid,size=16m',image,'python','-I','-S','-c',watchdog]
     try:
-        r=subprocess.run(command(argv),input=bootstrap(task,source,suite),text=True,capture_output=True,timeout=12)
+        r=subprocess.run(command(argv),input=program,text=True,capture_output=True,timeout=timeout+2)
         if r.returncode: return {'passed':False,'infrastructure_error':r.stderr[-1200:]}
         return json.loads(r.stdout)
-    except subprocess.TimeoutExpired:return {'passed':False,'error':'test container exceeded 12-second limit'}
+    except subprocess.TimeoutExpired:return {'passed':False,'error':f'test container exceeded {timeout}-second limit'}
     finally:
-        subprocess.run(command(['docker','rm','-f',name]),capture_output=True,timeout=6)
+        try:subprocess.run(command(['docker','rm','-f',name]),capture_output=True,timeout=6)
+        except (OSError,subprocess.TimeoutExpired):pass # Container watchdog still bounds its lifetime.
+
+def run(task, source, suite='v1'):
+    return execute(bootstrap(task,source,suite))
+
+def run_project(files):
+    from app_checks import program
+    return execute(program(files),timeout=25)
 
 if __name__=='__main__':
     def cancelled(_signal,_frame):raise RuntimeError('Test driver was cancelled')
     signal.signal(signal.SIGTERM,cancelled)
-    p=argparse.ArgumentParser();p.add_argument('--task',choices=CHECKS_V2,required=True)
-    p.add_argument('--suite',choices=['v1','v2'],default=os.environ.get('DSH_ARENA_SUITE','v1'));a=p.parse_args()
-    if a.task not in (CHECKS if a.suite=='v1' else CHECKS_V2):p.error('Task is not part of this suite')
-    try: print(json.dumps(run(a.task,json.load(sys.stdin)['source'],a.suite)))
+    p=argparse.ArgumentParser();p.add_argument('--task',choices=[*CHECKS_V2,'taskboard'],required=True)
+    p.add_argument('--suite',choices=['v1','v2','app-v1'],default=os.environ.get('DSH_ARENA_SUITE','v1'));a=p.parse_args()
+    if a.task not in (['taskboard'] if a.suite=='app-v1' else CHECKS if a.suite=='v1' else CHECKS_V2):p.error('Task is not part of this suite')
+    try:
+        payload=json.load(sys.stdin)
+        print(json.dumps(run_project(payload['files']) if a.suite=='app-v1' else run(a.task,payload['source'],a.suite)))
     except Exception as e: print(json.dumps({'passed':False,'infrastructure_error':str(e)[:1200]}))

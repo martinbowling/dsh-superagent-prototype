@@ -53,7 +53,11 @@ def summarize(root):
     final_ready=len(final_tests)==manifest.get('expected_tickets') and all(x['passed'] for x in final_tests.values())
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
     review=json.loads((root/'code-review.json').read_text()) if (root/'code-review.json').exists() else 'pending blind code review; no overall quality score inferred from throughput'
+    artifacts_passed=bool(manifest.get('expected_tickets')) and len(successful)==manifest.get('expected_tickets') and not truncated
+    workflow_complete=manifest['status']=='finished' and manifest.get('reporting_drained') is not False
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
+      'artifacts_passed':artifacts_passed,'workflow_complete':workflow_complete,
+      'reporting_drained':manifest.get('reporting_drained'),
       'fixture_suite':manifest.get('fixture_suite','v1'),'reasoning_effort':manifest.get('reasoning_effort'),
       'checker_sha256':manifest.get('checker_sha256'),
       'thinking_mode':manifest.get('requested_thinking_mode'),'thinking_controls':manifest.get('thinking_controls'),
@@ -72,7 +76,7 @@ def summarize(root):
       'first_attempt_passed_tickets':sum(bool(x['passed']) for x in first_tests.values()),
       'time_to_first_test_s':first_at/1000-origin if origin and first_at else None,
       'time_to_final_passing_tests_s':final_at/1000-origin if origin and final_at and final_ready else None,
-      'passed':manifest['status']=='finished' and len(successful)==manifest.get('expected_tickets') and not truncated,
+      'passed':workflow_complete and artifacts_passed,
       'quality_review':review}
 
 if __name__=='__main__':

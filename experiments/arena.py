@@ -20,6 +20,26 @@ from reasoning_gateway import off_prefill_gateway
 ROOT=Path(__file__).resolve().parent
 DEFAULT_THINKING='on'
 
+def complete_jsonl(path):
+    """Read appended telemetry without parsing a write's unfinished last line."""
+    if not path.exists():return []
+    text=path.read_text()
+    return [json.loads(line) for line in text.split('\n')[:-1] if line.strip()]
+
+def reporting_idle(entries,now,settled_at,quiet=2):
+    starts={x['id'] for x in entries if x['phase']=='start'}
+    ends={x['id'] for x in entries if x['phase']=='end'}
+    last=max((x['at']/1000 for x in entries),default=settled_at)
+    return starts==ends and now-max(last,settled_at)>=quiet
+
+def drain_reporting(state,deadline,settled_at,alive,*,monotonic=time.monotonic,wall=time.time,sleep=time.sleep):
+    """Final replies share the remaining workflow budget, not a second short cap."""
+    while monotonic()<deadline:
+        if not alive():raise RuntimeError('Harness exited while reporting')
+        if reporting_idle(complete_jsonl(state/'arena-calls.jsonl'),wall(),settled_at):return True
+        sleep(min(1,max(0,deadline-monotonic())))
+    return False
+
 class ManagementError(RuntimeError):
     def __init__(self,status,message):
         super().__init__(message);self.status=status
@@ -56,8 +76,9 @@ def save(base,block,value):
     return request(base,'settings/'+block,{'value':value,'revision':revision},method='PUT')
 
 def task_file(suite):
-    if suite not in ('v1','v2'):raise ValueError('Unknown fixture suite')
-    return ROOT/('tasks.json' if suite=='v1' else 'tasks-v2.json')
+    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json'}
+    if suite not in names:raise ValueError('Unknown fixture suite')
+    return ROOT/names[suite]
 
 def plan(config,suite='v2'):
     available=list(config['models'])
@@ -128,7 +149,7 @@ def harness_port_lock(config):
         yield
     finally:os.close(fd)
 
-def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None):
+def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None,tickets=None):
     config=with_effort(config,{coordinator,worker},thinking,effort)
     for name in {coordinator,worker}:
         model=config['models'][name]
@@ -141,29 +162,34 @@ def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_TH
     if unavailable:raise RuntimeError('Selected backend unavailable or incompatible: '+json.dumps(unavailable))
     with harness_port_lock(config):
         with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
-            return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking,suite,effort)
+            return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking,suite,effort,tickets)
 
-def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None):
+def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None,tickets=None):
     with socket.socket() as sock:
         if sock.connect_ex(('127.0.0.1',config.get('port',3086)))==0:raise RuntimeError('Dedicated Harness port is already in use; no process was changed')
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
     state=output/'state';state.mkdir()
     grader=output/'grader';grader.mkdir()
-    for name in ('check.py','checks_v2.py'):shutil.copy2(ROOT/name,grader/name)
+    grader_files=('check.py','checks_v2.py','app_checks.py')
+    for name in grader_files:shutil.copy2(ROOT/name,grader/name)
     run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}-{effort or "native"}-{suite}'
     selected=[t for t in json.loads(task_file(suite).read_text()) if not tasks or t['id'] in tasks]
     if not selected:raise ValueError('No matching tasks')
     # At least count tickets for a scaling run; names remain disjoint and deterministic.
     fixtures=[]
-    for i in range(max(count,len(selected))):
-        t=copy.deepcopy(selected[i%len(selected)]);t['id']+=f'--{i:02d}';fixtures.append(t)
+    number=max(count,len(selected)) if tickets is None else tickets
+    if not max(count,len(selected))<=number<=64:raise ValueError('Ticket count must cover every selected task and worker, up to 64')
+    for i in range(number):
+        t=copy.deepcopy(selected[i%len(selected)]);t['id']+=f'--{i:02d}'
+        if number>len(selected):t['prompt']+=f' Independent replica {i+1}: use its own ticket and workspace; do not attach this fixture to another ticket.'
+        fixtures.append(t)
     encoded=json.dumps(fixtures,sort_keys=True).encode()
     manifest={'schema':1,'id':run_id,'coordinator':coordinator,'worker':worker,'workers':count,
         'models':config['models'],'fixture_sha256':hashlib.sha256(encoded).hexdigest(),
         'dsh_version':config.get('dsh_version'),'upstream_revision':config.get('upstream_revision'),
         'started':time.time(),'status':'starting','scope':'real superagent local fixture tickets'}
     manifest.update(fixture_suite=suite,reasoning_effort=effort,
-        checker_sha256=hashlib.sha256((grader/'check.py').read_bytes()+(grader/'checks_v2.py').read_bytes()).hexdigest())
+        checker_sha256=hashlib.sha256(b''.join((grader/name).read_bytes() for name in grader_files)).hexdigest(),grader_files=list(grader_files),ticket_count=number,expected_tickets=number)
     manifest['requested_thinking_mode']=thinking
     manifest['thinking_controls']={name:thinking_kwargs(config['models'][name],thinking) for name in {coordinator,worker}}
     manifest['thinking_transport']={name:'closed-think-prefill' if thinking=='off' and config['models'][name].get('thinking_off_prefill') else 'native-template-kwargs' for name in {coordinator,worker}}
@@ -209,7 +235,7 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
         prompts=request(base,'prompts');value=prompts['current']['config']
         value.update(communication='One brief acknowledgement and a concise final result; replies stay in the local fixture outbox.',
           scope='Complete only the assigned synthetic fixture. Use arena_read, arena_write and arena_test. External tools are unavailable.',
-          delivery='This is a local experiment. Do not commit, push, open pull requests, merge, deploy, or contact external services. Run arena_test; repair failures within the budget. Report ready with the orchestrator report tool only after the tests pass; otherwise report blocked or failed. The local solution.py is the deliverable.')
+          delivery='This is a local experiment. Do not commit, push, open pull requests, merge, deploy, or contact external services. Run arena_test; repair failures within the budget. Report ready with the orchestrator report tool only after the tests pass; otherwise report blocked or failed. The writable files listed by arena_read are the local deliverable.')
         request(base,'prompts',{'config':value,'baseRevision':prompts['current']['revision']},method='PUT')
         (state/'fixtures.json').write_text(encoded.decode())
         manifest.update(status='running',work_started=time.time())
@@ -224,20 +250,13 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
             # The endpoint returns a bare list (current prototype) or a paginated items list.
             rows=result if isinstance(result,list) else result.get('items',result.get('tickets',[]))
             if len(rows)>=len(fixtures) and all(t.get('state')=='ended' or (t.get('stage')=='person' and t.get('action') in ('failed','blocked')) for t in rows):
-                manifest['status']='finished'
+                manifest['tasks_finished_at']=time.time()
+                manifest['status']='reporting'
+                (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
                 # Drain coordinator reporting and the final worker turn before
                 # ending the process or counting the experiment's wall time.
-                manifest['reporting_drained']=False
-                for _ in range(60):
-                    calls=state/'arena-calls.jsonl'
-                    entries=[json.loads(x) for x in calls.read_text().splitlines()] if calls.exists() else []
-                    ends=[x for x in entries if x['phase']=='end']
-                    starts={x['id'] for x in entries if x['phase']=='start'}
-                    ended_ids={x['id'] for x in ends}
-                    if ends and starts==ended_ids and time.time()-ends[-1]['at']/1000>=2:
-                        manifest['reporting_drained']=True
-                        break
-                    time.sleep(1)
+                manifest['reporting_drained']=drain_reporting(state,deadline,manifest['tasks_finished_at'],lambda:proc.poll() is None)
+                manifest['status']='finished' if manifest['reporting_drained'] else 'reporting_timeout'
                 break
             time.sleep(2)
         else:manifest['status']='timeout'
@@ -263,7 +282,8 @@ if __name__=='__main__':
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
     p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=900)
     p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int)
-    p.add_argument('--suite',choices=['v1','v2'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high']);a=p.parse_args()
+    p.add_argument('--suite',choices=['v1','v2','app-v1'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
+    p.add_argument('--tickets',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:
         for name in {a.coordinator,a.worker}:c['models'][name]['max_tokens']=a.max_tokens
@@ -271,4 +291,4 @@ if __name__=='__main__':
     elif a.action=='preflight':print(json.dumps(preflight(c),indent=2))
     else:
         if not a.output:p.error('--output is required for a run')
-        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout,a.thinking,a.suite,a.reasoning_effort),indent=2))
+        print(json.dumps(run(c,a.coordinator,a.worker,a.workers,a.tasks.split(',') if a.tasks else [],a.output,a.timeout,a.thinking,a.suite,a.reasoning_effort,a.tickets),indent=2))
