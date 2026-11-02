@@ -126,7 +126,7 @@ python3 experiments/arena.py run --config /private/fleet.json \
 
 Use a fresh output directory after a failure. Published project state is deliberately not resumed by a fresh runtime. Source tools save revision-hashed publications in state/projects/taskboard; each worker Session retains its separate Ticket directory/history. Generated code remains confined to the same Docker boundary; shared fixtures do not gain a host shell, deployments, external messaging or Git operations.
 
-For browser inspection, `app_preview.py` supports both new suites and rechecks their frozen grader first. Open `/__preview_viewport?width=390` on its loopback URL for a trusted same-origin 390-CSS-pixel frame around the sanitized generated app. Scripts and external resources stay blocked. The frame is test scaffolding and is not part of the model's UI.
+For browser inspection, `app_preview.py` supports both new suites and rechecks their frozen grader first. Open `/__preview_viewport?width=390` on its loopback URL for a trusted same-origin 390-CSS-pixel frame around the sanitized generated app. HTML error pages returned by form routes retain their HTML content type after sanitization; API routes retain a non-executable JSON content type. Scripts and external resources stay blocked. The frame is test scaffolding and is not part of the model's UI.
 
 ## Frozen runtime per run or batch
 

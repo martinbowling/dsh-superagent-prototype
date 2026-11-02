@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import unittest
 from app_checks import program,FILES
-from app_preview import safe_html,local_path
+from app_preview import safe_html,local_path,preview_response
 from matrix import schedule
 from app_checks_v2 import program as v2_program
 from component_checks import program as component_program
@@ -10,6 +10,12 @@ from app_reference import REFERENCE
 import ast
 
 class ProjectBoundaryTests(unittest.TestCase):
+    def test_form_error_pages_keep_html_behavior_without_allowing_active_content(self):
+        source=b'<main><p role="alert">Bad title</p><script>bad()</script></main>'
+        body,kind=preview_response('/tasks',source,'text/html; charset=utf-8')
+        self.assertTrue(kind.startswith('text/html'));self.assertIn(b'role="alert"',body);self.assertNotIn(b'<script',body)
+        body,kind=preview_response('/api/tasks',source,'text/html')
+        self.assertEqual(kind,'application/json');self.assertEqual(body,source)
     def test_component_contracts_cannot_substitute_unowned_model_files(self):
         files={**REFERENCE,'app.py':'unowned app','store.py':'owned database'}
         def embedded(source):return ast.literal_eval(ast.parse(source).body[0].value)

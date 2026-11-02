@@ -62,6 +62,14 @@ def safe_html(source):
     parser=SafeHTML();parser.feed(source)
     return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Taskboard preview</title><link rel="stylesheet" href="/static/style.css"></head><body>'+''.join(parser.out)+'</body></html>'
 
+def preview_response(path,content,content_type):
+    # A failed HTML form posts to /tasks, not /. Preserve that page's HTML
+    # behavior while applying the same sanitizer as the index route.
+    if (path=='/' or path.startswith('/tasks')) and content_type.split(';')[0].strip().lower()=='text/html':
+        return safe_html(content.decode(errors='replace')).encode(),'text/html; charset=utf-8'
+    if path=='/static/style.css':return content,'text/css; charset=utf-8'
+    return content,'application/json'
+
 RELAY=r'''
 import base64,json,urllib.request,urllib.error,sys
 p=json.load(sys.stdin);headers={'Content-Type':p.get('content_type','application/json')}
@@ -71,7 +79,7 @@ op=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
 req=urllib.request.Request('http://127.0.0.1:8765'+p['path'],data=base64.b64decode(p['body']) if p['body'] else None,headers=headers,method=p['method'])
 try:r=op.open(req,timeout=3)
 except urllib.error.HTTPError as e:r=e
-with r:print(json.dumps({'status':r.status,'location':r.headers.get('Location'),'body':base64.b64encode(r.read(65536)).decode()}))
+with r:print(json.dumps({'status':r.status,'location':r.headers.get('Location'),'content_type':r.headers.get('Content-Type',''),'body':base64.b64encode(r.read(65536)).decode()}))
 '''
 START=r'''
 import json,os,pathlib,subprocess,sys,time,urllib.request
@@ -133,9 +141,7 @@ def serve(run,config,state,port,replica=0):
             try:
                 result=json.loads(docker(config,['exec','-i',name,'python','-I','-S','-c',RELAY],json.dumps(payload)))
                 content=base64.b64decode(result['body']);path=urllib.parse.urlsplit(self.path).path
-                ctype='application/json'
-                if path=='/':content=safe_html(content.decode(errors='replace')).encode();ctype='text/html; charset=utf-8'
-                elif path=='/static/style.css':ctype='text/css; charset=utf-8'
+                content,ctype=preview_response(path,content,result.get('content_type',''))
                 self.send_response(result['status']);self.send_header('Content-Type',ctype)
                 self.send_header('Content-Security-Policy',CSP);self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control','no-store')
                 if result.get('location') and local_path(result['location']):self.send_header('Location',result['location'])
