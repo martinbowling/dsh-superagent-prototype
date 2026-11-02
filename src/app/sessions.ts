@@ -290,7 +290,7 @@ export class Sessions {
   private workOnly(agent: Agent, ticketId: string): (() => void)[] {
     const store = this.host.store
     const parent = scopeParentOf(agent)
-    const allow = (this.host.localFixtures ? ['arena_read', 'arena_write', 'arena_test'] : WORK_TOOLS).filter(name => agent.ctx.tools.get(name, parent))
+    const allow = (this.host.localFixtures ? ['arena_read', 'arena_write', 'arena_test', 'arena_publish'] : WORK_TOOLS).filter(name => agent.ctx.tools.get(name, parent))
     return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(() => {
       const current = store.tickets.get(ticketId)
       return !current || !liveTicket(current) ? 'Ticket ended; new work needs a new authorized ticket' : undefined

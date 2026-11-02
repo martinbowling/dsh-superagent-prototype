@@ -4,7 +4,7 @@ This fork adds an opt-in local-fixture Source to **the real superagent runtime**
 
 New experiment runs default to **reasoning on**, **suite v2**, and the configured 131,072-token output ceiling. GLM uses its native low reasoning setting. Pass `--thinking off` explicitly for the comparison arm; its GLM prefill behavior remains separately labeled in the manifest.
 
-Production defaults are unchanged. `localFixtures: true` skips account setup, refuses enabled external Sources, blocks the command transport, confines ticket directories under the new state root, and restricts workers to `arena_read`, `arena_write`, and `arena_test`. Router Sessions receive only their own orchestration tools. The local fixture Source is disabled in the default bundle. There are no automatic GPU restarts, publications, messages, merges, model downloads or boot changes.
+Production defaults are unchanged. `localFixtures: true` skips account setup, refuses enabled external Sources, blocks the command transport, confines ticket directories under the new state root, and restricts workers to `arena_read`, `arena_write`, `arena_test`, and the shared-project-only `arena_publish`. Router Sessions receive only their own orchestration tools. The local fixture Source is disabled in the default bundle. There are no automatic GPU restarts, publications, messages, merges, model downloads or boot changes.
 
 ## Experiments
 
@@ -108,3 +108,28 @@ Run `python3 -m unittest discover -s experiments -p 'test_*.py'` alongside the r
 ## Completion semantics
 
 Ticket completion and finished coordinator reporting are separate milestones. Once task jobs end, the runner drains outstanding model calls using the remainder of the original workflow deadline. It ignores incomplete telemetry writes and requires a quiet interval after the last call. A reporting deadline produces `reporting_timeout`, not `finished`. Summaries expose `artifacts_passed` and `workflow_complete`; overall `passed` requires both. Historical artifacts may pass even when their run was cut off during reporting, and must not be presented as a completed workflow.
+
+## App-v2 acceptance and one shared app
+
+App-v2 retains the original 48 app checks and adds 12 UI acceptance checks: real status filtering, Unicode/literal search, filtered empty states, associated labels and length hints, accessible active-filter state, retained search links, HTML form error recovery, real action forms, an end-to-end create/complete/filter/delete flow and escaped reflected search. The prompt now explicitly requires those behaviors. These are HTTP/HTML acceptance checks; separate browser interaction is still required for keyboard focus and visual layout at 390 pixels. V1 and its historical scores stay unchanged.
+
+`shared-app-v2` creates **one app and four role Tickets**, with a limit of four worker slots. Database owns store.py, API owns app.py, and UI owns the template/CSS. All can read the current shared files; they cannot write outside their role. A documented store API and template-token/class contract binds the components. Each component is tested against trusted reference peers inside Docker, explicitly labeled `reference-peers`. A component pass is not an integrated-app pass. `arena_publish` requires passing tests of the current file hash and locks the published component. Duplicate owners, edits after publication and stale test receipts are refused.
+
+The controller admits the integration Ticket only after all three component Tickets complete and all three publications exist. Thus three component workers can run together; the fourth role runs after that dependency gate. Integration may repair any of the four model-authored files, tests them together with `model-only` peers and publishes the combined revision. The controller then independently rechecks that exact integrated hash. Summary success requires this verification and completed coordinator reporting; component pass counts cannot masquerade as completed apps. One shared project is not comparable to four independent app replicas.
+
+```sh
+python3 experiments/arena.py run --config /private/fleet.json \
+  --coordinator blackfold --worker blackfold --workers 4 \
+  --suite shared-app-v2 --thinking on --reasoning-effort low \
+  --max-tokens 131072 --timeout 2400 --output /private/runs/shared-app-low-r1
+```
+
+Use a fresh output directory after a failure. Published project state is deliberately not resumed by a fresh runtime. Source tools save revision-hashed publications in state/projects/taskboard; each worker Session retains its separate Ticket directory/history. Generated code remains confined to the same Docker boundary; shared fixtures do not gain a host shell, deployments, external messaging or Git operations.
+
+For browser inspection, `app_preview.py` supports both new suites and rechecks their frozen grader first. Open `/__preview_viewport?width=390` on its loopback URL for a trusted same-origin 390-CSS-pixel frame around the sanitized generated app. Scripts and external resources stay blocked. The frame is test scaffolding and is not part of the model's UI.
+
+## Frozen runtime per run or batch
+
+Before a new run, `snapshot.py` builds and copies the plugin, installed dependency trees, installed DSH CLI, Node executable, profile template and experiment/grader inputs into a private snapshot next to the run. It preserves Node's node_modules layout, rewrites dependency links inside the copied roots, rejects external dependency links and makes copied files read-only. It records source revision/dirty state and content/link hashes. Runs use the snapshot's CLI, Node, plugin, inputs and isolated HOME, without consulting the live checkout. No packages or model weights are downloaded.
+
+The matrix creates one snapshot for the whole batch and verifies its hashes before each arm. Subsequent edits/builds in the live checkout do not change the copied runtime or graders. A changed snapshot aborts before starting another arm. The original shared port lock remains authoritative even with separate snapshot HOMEs. This freezes the application runtime, not the host OS, system libraries, remote GPU service or backend cache state; record those separately. Keep the snapshot and receipt with the run's evidence. A full installed snapshot currently needs roughly 1 GB, once per batch.

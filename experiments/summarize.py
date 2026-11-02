@@ -54,9 +54,15 @@ def summarize(root):
     complete=bool(started) and len(started)==accounted and set(ended)==set(started) and all(e.get('completed',False) for e in ended.values())
     review=json.loads((root/'code-review.json').read_text()) if (root/'code-review.json').exists() else 'pending blind code review; no overall quality score inferred from throughput'
     artifacts_passed=bool(manifest.get('expected_tickets')) and len(successful)==manifest.get('expected_tickets') and not truncated
+    shared=manifest.get('shared_project')
+    verification=json.loads((root/'project-verification.json').read_text()) if (root/'project-verification.json').exists() else None
+    if shared:artifacts_passed=artifacts_passed and bool(verification and verification.get('passed'))
     workflow_complete=manifest['status']=='finished' and manifest.get('reporting_drained') is not False
     return {'run':manifest['id'],'status':manifest['status'],'scope':manifest['scope'],
       'artifacts_passed':artifacts_passed,'workflow_complete':workflow_complete,
+      'shared_project':shared,'completed_projects':int(artifacts_passed) if shared else None,
+      'project_verification':verification,'runtime_snapshot_sha256':manifest.get('runtime_snapshot_sha256'),
+      'first_attempt_project_passed':next((x['passed'] for x in first_tests.values() if x.get('project_role')=='integration'),None),
       'reporting_drained':manifest.get('reporting_drained'),
       'fixture_suite':manifest.get('fixture_suite','v1'),'reasoning_effort':manifest.get('reasoning_effort'),
       'checker_sha256':manifest.get('checker_sha256'),

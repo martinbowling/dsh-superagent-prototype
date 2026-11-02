@@ -9,11 +9,20 @@ import { key, type Trigger } from '../core/index.ts'
 import { sourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
 import { FixturePath, readFixtureFiles, seedFixtureFiles, writeFixtureFile } from './fixture-files.ts'
+import { FixtureProject, PROJECT_FILES, ROLE_FILES, type ProjectRole } from './fixture-project.ts'
 
 export const Fixture = z.object({ id: z.string().regex(/^[a-z0-9-]{1,80}$/),
   prompt: z.string().min(1).max(24000), files: z.record(z.string(), z.string()).default({}),
-  writableFiles: z.array(FixturePath).min(1).max(4).refine(paths => new Set(paths).size === paths.length, 'Duplicate output path').optional() }).strict()
+  writableFiles: z.array(FixturePath).min(1).max(4).refine(paths => new Set(paths).size === paths.length, 'Duplicate output path').optional(),
+  sharedProject: z.string().regex(/^[a-z0-9-]{1,80}$/).optional(),
+  projectRole: z.enum(['database', 'api', 'ui', 'integration']).optional(),
+}).strict().superRefine((task, ctx) => {
+  if (Boolean(task.sharedProject) !== Boolean(task.projectRole)) ctx.addIssue({ code: 'custom', message: 'Shared project and role must be paired' })
+  if (task.projectRole && JSON.stringify([...(task.writableFiles ?? [])].sort()) !== JSON.stringify([...ROLE_FILES[task.projectRole]].sort()))
+    ctx.addIssue({ code: 'custom', message: 'Shared project role must use its exact owned files' })
+})
 export const FixtureList = z.array(Fixture).max(64).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Duplicate fixture id')
+  .refine(items => { const owners = items.filter(x => x.sharedProject).map(x => `${x.sharedProject}:${x.projectRole}`); return new Set(owners).size === owners.length }, 'Duplicate shared component owner')
 export type FixtureTask = z.infer<typeof Fixture>
 export function fixtureTrigger(fixture: FixtureTask): Trigger {
   return { id: key('fixtures', fixture.id), source: 'fixtures', threads: [{ source: 'fixtures', id: fixture.id }],
@@ -44,6 +53,7 @@ export function apply(ctx: Context): void {
   let root = ''
   let logging = Promise.resolve()
   let active = 0, serial = 0
+  const projects = new Map<string, Promise<FixtureProject>>()
   const callLog = (row: Record<string, unknown>) => {
     if (root) logging = logging.then(() => appendFile(join(root, 'arena-calls.jsonl'), JSON.stringify(row) + '\n', { mode: 0o600 }))
       .catch(error => { ctx.logger.warn('arena call telemetry: %s', String(error)) })
@@ -97,33 +107,43 @@ export function apply(ctx: Context): void {
     const directory = await realpath(ticket.execution.directory), base = await realpath(join(root, 'work')), rel = relative(base, directory)
     if (!rel || rel.startsWith('..') || isAbsolute(rel) || (await lstat(directory)).isSymbolicLink()) throw new Error('Invalid fixture workspace')
     const allowed = task.writableFiles ?? ['solution.py']
+    if (task.sharedProject) {
+      let project = projects.get(task.sharedProject)
+      if (!project) { project = FixtureProject.create(root, task.sharedProject, task.files); projects.set(task.sharedProject, project) }
+      return { task, directory, allowed, project: await project }
+    }
     if (task.writableFiles) await seedFixtureFiles(directory, allowed, task.files)
-    return { task, directory, allowed }
+    return { task, directory, allowed, project: undefined }
   }
   const output = { schema: { type: 'object' as const, additionalProperties: true },
     render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] }
   const parameters = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
   ctx.tools.register({ name: 'arena_read', description: 'Read the assigned fixture requirements, input files, and current solution.',
     parameters: parameters({}), output, execute: async (_args, exec) => {
-      const { task, directory, allowed } = await locate(exec.agent?.id)
-      const workspace = await readFixtureFiles(directory, allowed)
-      return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace, solution: workspace['solution.py'] ?? null }
+      const { task, directory, allowed, project } = await locate(exec.agent?.id)
+      const snapshot = project && await project.snapshot(task.projectRole!)
+      const workspace = snapshot?.files ?? await readFixtureFiles(directory, allowed)
+      return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace,
+        sharedProject: task.sharedProject, projectRole: task.projectRole, publications: snapshot?.publications, solution: workspace['solution.py'] ?? null }
     } })
   ctx.tools.register({ name: 'arena_write', description: 'Write a complete allowed output file. path defaults to solution.py; app fixtures list their writableFiles in arena_read.',
     parameters: parameters({ path: { type: 'string' }, content: { type: 'string', maxLength: 64000 } }, ['content']), output,
     execute: async (value, exec) => {
       const { content, path } = z.object({ content: z.string().max(64000), path: FixturePath.default('solution.py') }).strict().parse(value)
-      const { directory, allowed } = await locate(exec.agent?.id)
-      return { path, bytes: await writeFixtureFile(directory, allowed, path, content) }
+      const { directory, allowed, task, project } = await locate(exec.agent?.id)
+      return { path, bytes: project ? await project.write(task.projectRole!, path, content) : await writeFixtureFile(directory, allowed, path, content) }
     } })
   ctx.tools.register({ name: 'arena_test', description: 'Run the assigned fixture tests in a bounded disposable container and return the result.',
     parameters: parameters({}), output, execute: async (_value, exec) => {
-      const { task, directory, allowed } = await locate(exec.agent?.id)
+      const { task, directory, allowed, project } = await locate(exec.agent?.id)
       const driver = process.env.DSH_ARENA_TEST_DRIVER
       if (!driver) throw new Error('DSH_ARENA_TEST_DRIVER is not configured')
-      const files = await readFixtureFiles(directory, allowed)
-      return await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const child = spawn('python3', [driver, '--task', task.id.split('--')[0]!], {
+      const snapshot = project && await project.snapshot(task.projectRole!)
+      const files = snapshot?.files ?? await readFixtureFiles(directory, allowed)
+      const args = [driver, '--task', task.sharedProject ? 'taskboard' : task.id.split('--')[0]!]
+      if (task.projectRole) args.push('--role', task.projectRole)
+      const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const child = spawn('python3', args, {
           stdio: ['pipe', 'pipe', 'pipe'], signal: AbortSignal.any([exec.signal, AbortSignal.timeout(task.writableFiles ? 45000 : 25000)]) })
         let stdout = '', stderr = ''
         child.stdout.on('data', b => { stdout = (stdout + b).slice(-64000) })
@@ -132,5 +152,13 @@ export function apply(ctx: Context): void {
         child.on('close', code => { try { resolve(JSON.parse(stdout)) } catch { reject(new Error(`Test driver ${code}: ${stderr}`)) } })
         child.stdin.end(JSON.stringify(task.writableFiles ? { files } : { source: files['solution.py'] }))
       })
+      if (project) await project.recordTest(task.projectRole!, snapshot!.sha256, result)
+      return result
+    } })
+  ctx.tools.register({ name: 'arena_publish', description: 'Lock a shared component after passing tests of its current revision, then report ready. Integration waits for database/API/UI publications.',
+    parameters: parameters({}), output, execute: async (_value, exec) => {
+      const { task, project } = await locate(exec.agent?.id)
+      if (!project) throw new Error('Publish is only available to shared-project fixtures')
+      return { role: task.projectRole, publication: await project.publish(task.projectRole as ProjectRole), readableFiles: PROJECT_FILES }
     } })
 }

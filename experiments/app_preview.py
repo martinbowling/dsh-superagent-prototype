@@ -7,18 +7,22 @@ from pathlib import Path
 from app_checks import FILES
 
 ROUTE=re.compile(r'/(?:health|api/tasks(?:/[1-9][0-9]*)?|tasks(?:/[1-9][0-9]*/(?:toggle|delete))?|static/style\.css)?')
-CSP="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'none'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+CSP="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'none'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'"
 
 def verify_project(run,config,files):
     manifest=json.loads((run/'manifest.json').read_text())
-    if manifest.get('fixture_suite')!='app-v1':raise ValueError('Preview requires an app-v1 run')
+    suite=manifest.get('fixture_suite')
+    if suite not in ('app-v1','app-v2','shared-app-v2'):raise ValueError('Preview requires an app run')
     grader=run/'grader'
     names=manifest.get('grader_files',[])
-    if names!=['check.py','checks_v2.py','app_checks.py']:raise ValueError('Missing frozen app grader')
+    from snapshot import GRADER_FILES
+    if names not in (['check.py','checks_v2.py','app_checks.py'],list(GRADER_FILES)):raise ValueError('Missing frozen app grader')
     digest=hashlib.sha256(b''.join((grader/name).read_bytes() for name in names)).hexdigest()
     if digest!=manifest.get('checker_sha256'):raise ValueError('Frozen grader hash changed')
     env=os.environ.copy();env.update(ARENA_DOCKER_SSH=config.get('docker_ssh',''),ARENA_PYTHON_IMAGE=config['python_image'])
-    result=subprocess.run([sys.executable,str(grader/'check.py'),'--suite','app-v1','--task','taskboard'],input=json.dumps({'files':files}),text=True,capture_output=True,timeout=40,env=env)
+    args=[sys.executable,str(grader/'check.py'),'--suite',suite,'--task','taskboard']
+    if suite=='shared-app-v2':args+=['--role','integration']
+    result=subprocess.run(args,input=json.dumps({'files':files}),text=True,capture_output=True,timeout=40,env=env)
     checked=json.loads(result.stdout)
     if result.returncode or not checked.get('passed'):raise ValueError('Preview requires an independent passing app check')
     return {'passed':True,'passed_cases':checked['passed_cases'],'total_cases':checked['total_cases'],'checker_sha256':digest,
@@ -30,7 +34,7 @@ def local_path(value):
 
 class SafeHTML(HTMLParser):
     tags=set('main header footer section article div span h1 h2 h3 p ul ol li form label input button a table thead tbody tr th td strong em small select option br hr nav aside'.split())
-    attrs=set('class id role type name placeholder value checked selected for disabled maxlength required aria-label aria-live'.split())
+    attrs=set('class id role type name placeholder value checked selected for disabled maxlength required aria-label aria-live aria-current aria-describedby aria-invalid'.split())
     suppress={'head','script','style','iframe','object','embed','svg','math'}
     def __init__(self):super().__init__(convert_charrefs=True);self.out=[];self.skipped=[]
     def handle_starttag(self,tag,attrs):
@@ -97,7 +101,9 @@ def docker(config,args,payload=None,timeout=15):
     return result.stdout
 
 def serve(run,config,state,port,replica=0):
-    paths=sorted(p for p in (run/'state/work').iterdir() if p.is_dir() and all((p/name).is_file() and not (p/name).is_symlink() for name in FILES))
+    manifest=json.loads((run/'manifest.json').read_text())
+    candidates=[run/'state/projects/taskboard'] if manifest.get('shared_project') else list((run/'state/work').iterdir())
+    paths=sorted(p for p in candidates if p.is_dir() and all((p/name).is_file() and not (p/name).is_symlink() for name in FILES))
     directory=paths[replica];files={name:(directory/name).read_text() for name in FILES}
     if any(len(v.encode())>64000 for v in files.values()):raise ValueError('Project file too large')
     verification=verify_project(run,config,files)
@@ -109,6 +115,11 @@ def serve(run,config,state,port,replica=0):
         def handle_request(self):
             origin=self.headers.get('Origin')
             if origin and origin!=url:self.send_error(403);return
+            if self.command=='GET' and urllib.parse.urlsplit(self.path).path=='/__preview_viewport':
+                width=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('width',['390'])[0]
+                if width not in ('390','768'):self.send_error(400);return
+                content=('<!doctype html><html lang="en"><meta charset="utf-8"><title>Taskboard viewport '+width+'</title><style>body{margin:12px;background:#e5e9ef;font:14px system-ui}iframe{display:block;width:'+width+'px;height:820px;border:1px solid #9ba6b5;background:white}</style><p>Trusted test frame: '+width+' CSS pixels. The app below retains its generated HTML/CSS.</p><iframe src="/" title="Taskboard '+width+' pixel viewport"></iframe></html>').encode()
+                self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Security-Policy',"default-src 'none'; frame-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'");self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content);return
             if self.path=='/__preview_stop' and self.command=='POST':
                 if not secrets.compare_digest(self.headers.get('X-Preview-Key',''),nonce):self.send_error(403);return
                 self.send_response(200);self.end_headers();self.wfile.write(b'stopping')

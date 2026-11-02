@@ -120,17 +120,28 @@ except subprocess.TimeoutExpired:
 def run(task, source, suite='v1'):
     return execute(bootstrap(task,source,suite))
 
-def run_project(files):
-    from app_checks import program
+def run_project(files,suite='app-v1',role=None):
+    if role:
+        from component_checks import program
+        result=execute(program(files,role),timeout=25)
+        result.update(project_role=role,peer_mode='model-only' if role=='integration' else 'reference-peers')
+        result.pop('preview_html',None);result.pop('preview_css',None)
+        return result
+    if suite=='app-v2':
+        from app_checks_v2 import program
+    else:
+        from app_checks import program
     return execute(program(files),timeout=25)
 
 if __name__=='__main__':
     def cancelled(_signal,_frame):raise RuntimeError('Test driver was cancelled')
     signal.signal(signal.SIGTERM,cancelled)
     p=argparse.ArgumentParser();p.add_argument('--task',choices=[*CHECKS_V2,'taskboard'],required=True)
-    p.add_argument('--suite',choices=['v1','v2','app-v1'],default=os.environ.get('DSH_ARENA_SUITE','v1'));a=p.parse_args()
-    if a.task not in (['taskboard'] if a.suite=='app-v1' else CHECKS if a.suite=='v1' else CHECKS_V2):p.error('Task is not part of this suite')
+    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2'],default=os.environ.get('DSH_ARENA_SUITE','v1'))
+    p.add_argument('--role',choices=['database','api','ui','integration']);a=p.parse_args()
+    if a.task not in (['taskboard'] if a.suite.startswith(('app-','shared-app-')) else CHECKS if a.suite=='v1' else CHECKS_V2):p.error('Task is not part of this suite')
+    if bool(a.role)!=(a.suite=='shared-app-v2'):p.error('Only shared-app-v2 requires a role')
     try:
         payload=json.load(sys.stdin)
-        print(json.dumps(run_project(payload['files']) if a.suite=='app-v1' else run(a.task,payload['source'],a.suite)))
+        print(json.dumps(run_project(payload['files'],'app-v2' if a.suite=='shared-app-v2' else a.suite,a.role) if a.suite.startswith(('app-','shared-app-')) else run(a.task,payload['source'],a.suite)))
     except Exception as e: print(json.dumps({'passed':False,'infrastructure_error':str(e)[:1200]}))

@@ -16,9 +16,26 @@ import socket
 import fcntl
 from contextlib import contextmanager
 from reasoning_gateway import off_prefill_gateway
+from snapshot import freeze_runtime, snapshot_inputs, GRADER_FILES
 
 ROOT=Path(__file__).resolve().parent
 DEFAULT_THINKING='on'
+PROJECT_FILES=['app.py','store.py','templates/index.html','static/style.css']
+
+def project_hash(files,paths=PROJECT_FILES):
+    return hashlib.sha256(json.dumps([[name,files.get(name)] for name in paths],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+
+def read_publications(state):
+    path=state/'projects/taskboard/publications.json'
+    return json.loads(path.read_text()) if path.exists() else {}
+
+def verify_project(state,grader,env):
+    directory=state/'projects/taskboard';files={name:(directory/name).read_text() for name in PROJECT_FILES}
+    digest=project_hash(files);publication=read_publications(state).get('integration',{})
+    if digest!=publication.get('sha256'):return {'passed':False,'error':'Published integrated files changed'}
+    result=subprocess.run(['python3',str(grader/'check.py'),'--suite','shared-app-v2','--task','taskboard','--role','integration'],input=json.dumps({'files':files}),text=True,capture_output=True,timeout=35,env=env)
+    value=json.loads(result.stdout);value.update(project_sha256=digest,publication=publication)
+    return value
 
 def complete_jsonl(path):
     """Read appended telemetry without parsing a write's unfinished last line."""
@@ -75,10 +92,10 @@ def save(base,block,value):
     else:revision=settings['blocks'][block]['revision']
     return request(base,'settings/'+block,{'value':value,'revision':revision},method='PUT')
 
-def task_file(suite):
-    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json'}
+def task_file(suite,root=ROOT):
+    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json','app-v2':'tasks-app-v2.json','shared-app-v2':'tasks-shared-app-v2.json'}
     if suite not in names:raise ValueError('Unknown fixture suite')
-    return ROOT/names[suite]
+    return root/names[suite]
 
 def plan(config,suite='v2'):
     available=list(config['models'])
@@ -141,7 +158,7 @@ def overlay(config,state,coordinator,thinking=DEFAULT_THINKING):
 
 @contextmanager
 def harness_port_lock(config):
-    path=Path(config['dsh_home'])/f'arena-port-{config.get("port",3086)}.lock'
+    path=Path(config.get('port_lock_home',config['dsh_home']))/f'arena-port-{config.get("port",3086)}.lock'
     fd=os.open(path,os.O_CREAT|os.O_RDWR,0o600)
     try:
         try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -150,6 +167,7 @@ def harness_port_lock(config):
     finally:os.close(fd)
 
 def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_THINKING,suite='v2',effort=None,tickets=None):
+    if output.exists():raise FileExistsError('Use a fresh run output directory')
     config=with_effort(config,{coordinator,worker},thinking,effort)
     for name in {coordinator,worker}:
         model=config['models'][name]
@@ -161,6 +179,7 @@ def run(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFAULT_TH
     unavailable={name:check for name,check in checks.items() if not check['available']}
     if unavailable:raise RuntimeError('Selected backend unavailable or incompatible: '+json.dumps(unavailable))
     with harness_port_lock(config):
+        config=freeze_runtime(config,output.resolve().with_name(output.name+'-runtime'))
         with off_prefill_gateway(config,thinking,{coordinator,worker},output.resolve()/'request-transforms.jsonl') as routed:
             return run_owned(routed,coordinator,worker,count,tasks,output,timeout,thinking,suite,effort,tickets)
 
@@ -170,14 +189,16 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
     output=output.resolve();output.mkdir(parents=True,exist_ok=False)
     state=output/'state';state.mkdir()
     grader=output/'grader';grader.mkdir()
-    grader_files=('check.py','checks_v2.py','app_checks.py')
-    for name in grader_files:shutil.copy2(ROOT/name,grader/name)
+    source_root=snapshot_inputs(config);grader_files=GRADER_FILES
+    for name in grader_files:shutil.copy2(source_root/name,grader/name)
     run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}-{effort or "native"}-{suite}'
-    selected=[t for t in json.loads(task_file(suite).read_text()) if not tasks or t['id'] in tasks]
+    selected=[t for t in json.loads(task_file(suite,source_root).read_text()) if not tasks or t['id'] in tasks]
     if not selected:raise ValueError('No matching tasks')
     # At least count tickets for a scaling run; names remain disjoint and deterministic.
     fixtures=[]
     number=max(count,len(selected)) if tickets is None else tickets
+    shared=suite=='shared-app-v2'
+    if shared and (count!=4 or number!=4 or len(selected)!=4):raise ValueError('Shared app requires all four roles and four worker slots')
     if not max(count,len(selected))<=number<=64:raise ValueError('Ticket count must cover every selected task and worker, up to 64')
     for i in range(number):
         t=copy.deepcopy(selected[i%len(selected)]);t['id']+=f'--{i:02d}'
@@ -190,6 +211,9 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
         'started':time.time(),'status':'starting','scope':'real superagent local fixture tickets'}
     manifest.update(fixture_suite=suite,reasoning_effort=effort,
         checker_sha256=hashlib.sha256(b''.join((grader/name).read_bytes() for name in grader_files)).hexdigest(),grader_files=list(grader_files),ticket_count=number,expected_tickets=number)
+    manifest.update(runtime_snapshot_sha256=config.get('runtime_snapshot_sha256'),runtime_snapshot=config.get('runtime_snapshot'),
+        shared_project='taskboard' if shared else None,expected_projects=1 if shared else None)
+    (output/'fixture-plan.json').write_text(encoded.decode())
     manifest['requested_thinking_mode']=thinking
     manifest['thinking_controls']={name:thinking_kwargs(config['models'][name],thinking) for name in {coordinator,worker}}
     manifest['thinking_transport']={name:'closed-think-prefill' if thinking=='off' and config['models'][name].get('thinking_off_prefill') else 'native-template-kwargs' for name in {coordinator,worker}}
@@ -206,10 +230,13 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
       DSH_ARENA_TEST_DRIVER=str(grader/'check.py'),ARENA_DOCKER_SSH=config.get('docker_ssh',''),
       DSH_ARENA_SUITE=suite,
       ARENA_PYTHON_IMAGE=config.get('python_image','python:3.12-alpine'))
+    if config.get('node_bin_dir'):env['PATH']=config['node_bin_dir']+os.pathsep+env.get('PATH','')
+    env.pop('NODE_PATH',None);env.pop('NODE_OPTIONS',None)
+    env['PYTHONDONTWRITEBYTECODE']='1'
     base=f'http://127.0.0.1:{config.get("port",3086)}'
     command=[config['dsh_bin'],'--profile',config.get('profile','arena'),'--patch',str(patch),'--no-open']
     with (output/'harness.log').open('w') as log:
-        proc=subprocess.Popen(command,cwd=ROOT.parent,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        proc=subprocess.Popen(command,cwd=config.get('runtime_snapshot',str(ROOT.parent)),env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     manifest['harness_pid']=proc.pid
     (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
     try:
@@ -234,10 +261,12 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
             'model':{'provider':'arena-'+coordinator,'model':config['models'][coordinator]['model']}})
         prompts=request(base,'prompts');value=prompts['current']['config']
         value.update(communication='One brief acknowledgement and a concise final result; replies stay in the local fixture outbox.',
-          scope='Complete only the assigned synthetic fixture. Use arena_read, arena_write and arena_test. External tools are unavailable.',
+          scope='Complete only the assigned synthetic fixture. Use arena_read, arena_write, arena_test and, for shared roles, arena_publish. External tools are unavailable.',
           delivery='This is a local experiment. Do not commit, push, open pull requests, merge, deploy, or contact external services. Run arena_test; repair failures within the budget. Report ready with the orchestrator report tool only after the tests pass; otherwise report blocked or failed. The writable files listed by arena_read are the local deliverable.')
         request(base,'prompts',{'config':value,'baseRevision':prompts['current']['revision']},method='PUT')
-        (state/'fixtures.json').write_text(encoded.decode())
+        initial=[t for t in fixtures if t.get('projectRole')!='integration'] if shared else fixtures
+        (state/'fixtures.json').write_text(json.dumps(initial))
+        integration_enqueued=not shared
         manifest.update(status='running',work_started=time.time())
         (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
         deadline=time.monotonic()+timeout
@@ -249,6 +278,13 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
             (output/'tickets.json').write_text(json.dumps(result,indent=2))
             # The endpoint returns a bare list (current prototype) or a paginated items list.
             rows=result if isinstance(result,list) else result.get('items',result.get('tickets',[]))
+            if shared and not integration_enqueued and any(t.get('stage')=='person' and t.get('action') in ('failed','blocked') for t in rows):manifest['status']='component_failed';break
+            if shared and not integration_enqueued and len(rows)==3 and all(t.get('state')=='ended' for t in rows):
+                if any(t.get('ended',{}).get('outcome')!='completed' for t in rows):manifest['status']='component_failed';break
+                publications=read_publications(state)
+                if not all(role in publications for role in ['database','api','ui']):manifest['status']='component_publish_missing';break
+                (state/'fixtures.json').write_text(encoded.decode());integration_enqueued=True
+                manifest['integration_started_at']=time.time();(output/'manifest.json').write_text(json.dumps(manifest,indent=2))
             if len(rows)>=len(fixtures) and all(t.get('state')=='ended' or (t.get('stage')=='person' and t.get('action') in ('failed','blocked')) for t in rows):
                 manifest['tasks_finished_at']=time.time()
                 manifest['status']='reporting'
@@ -257,6 +293,13 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
                 # ending the process or counting the experiment's wall time.
                 manifest['reporting_drained']=drain_reporting(state,deadline,manifest['tasks_finished_at'],lambda:proc.poll() is None)
                 manifest['status']='finished' if manifest['reporting_drained'] else 'reporting_timeout'
+                if shared and manifest['status']=='finished':
+                    if 'integration' not in read_publications(state):manifest['status']='integration_publish_missing'
+                    elif deadline-time.monotonic()<35:manifest['status']='validation_timeout'
+                    else:
+                        verification=verify_project(state,grader,env)
+                        (output/'project-verification.json').write_text(json.dumps(verification,indent=2))
+                        if not verification.get('passed'):manifest['status']='integration_failed'
                 break
             time.sleep(2)
         else:manifest['status']='timeout'
@@ -282,7 +325,7 @@ if __name__=='__main__':
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
     p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=900)
     p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int)
-    p.add_argument('--suite',choices=['v1','v2','app-v1'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
+    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
     p.add_argument('--tickets',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:

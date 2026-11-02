@@ -41,6 +41,12 @@ class ArenaEvidenceTests(unittest.TestCase):
             root=Path(d);self.fixture(root);p=root/'manifest.json';m=json.loads(p.read_text())
             m.update(status='reporting_timeout',reporting_drained=False);p.write_text(json.dumps(m));r=summarize(root)
             self.assertTrue(r['artifacts_passed']);self.assertFalse(r['workflow_complete']);self.assertFalse(r['passed'])
+    def test_shared_project_requires_independent_integrated_verification(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);self.fixture(root);p=root/'manifest.json';m=json.loads(p.read_text());m['shared_project']='taskboard';p.write_text(json.dumps(m))
+            self.assertFalse(summarize(root)['passed'])
+            (root/'project-verification.json').write_text(json.dumps({'passed':True,'passed_cases':60,'total_cases':60}))
+            self.assertTrue(summarize(root)['passed']);self.assertEqual(summarize(root)['completed_projects'],1)
     def test_drain_waits_for_a_late_request_and_uses_remaining_budget(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);clock=[0.0]

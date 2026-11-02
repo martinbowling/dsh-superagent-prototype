@@ -4,8 +4,20 @@ import unittest
 from app_checks import program,FILES
 from app_preview import safe_html,local_path
 from matrix import schedule
+from app_checks_v2 import program as v2_program
+from component_checks import program as component_program
+from app_reference import REFERENCE
+import ast
 
 class ProjectBoundaryTests(unittest.TestCase):
+    def test_component_contracts_cannot_substitute_unowned_model_files(self):
+        files={**REFERENCE,'app.py':'unowned app','store.py':'owned database'}
+        def embedded(source):return ast.literal_eval(ast.parse(source).body[0].value)
+        database=embedded(component_program(files,'database'))
+        self.assertEqual(database['store.py'],'owned database');self.assertEqual(database['app.py'],REFERENCE['app.py'])
+        self.assertEqual(embedded(component_program(files,'integration'))['app.py'],'unowned app')
+        self.assertNotIn('UI open filter excludes',program(REFERENCE));self.assertIn('UI open filter excludes',v2_program(REFERENCE))
+        with self.assertRaises(ValueError):component_program(files,'unknown')
     def test_project_requires_exact_bounded_files(self):
         files={x:'text' for x in FILES}
         self.assertIn('FILES=',program(files))

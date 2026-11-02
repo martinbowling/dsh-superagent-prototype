@@ -402,6 +402,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | Experiment module | Purpose |
 | --- | --- |
 | `src/sources/fixture-files.ts` | Allowlisted text artifacts, bounded UTF-8 writes, symlink refusal and project starter seeding |
+| `src/sources/fixture-project.ts` | Shared synthetic app ownership, revision tests, component publications and integration locks. |
 | `src/sources/local-fixtures.ts` | Local fixture intake, local replies, confined artifact tools, and experiment telemetry; requires explicit local mode |
 
 | Experiment test | Coverage |
@@ -433,6 +434,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/fixture-files.spec.ts` | Bounded project artifacts, immutable starters, path and symlink confinement |
+| `tests/fixture-project.spec.ts` | Shared reads, unique owners, stale-test rejection, publication locks and integration handoff. |
 | `tests/local-fixtures.spec.ts` | Opt-in experiment startup, fixture identity and refusal of external Sources |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
