@@ -1,8 +1,33 @@
 """Copy installed runtime, built plugin, dependencies, Node and experiment inputs once per batch."""
-import copy,hashlib,json,os,shutil,subprocess
+import copy,hashlib,json,os,shutil,subprocess,sys
 from pathlib import Path
 
 GRADER_FILES=('check.py','checks_v2.py','app_checks.py','app_checks_v2.py','app_reference.py','component_checks.py')
+
+def copy_node(node,directory):
+    binary=directory/'bin';binary.mkdir();libraries=directory/'lib';libraries.mkdir()
+    node=node.resolve();shutil.copy2(node,binary/'node')
+    # Homebrew's Node uses @loader_path/../lib for this library.
+    for library in (node.parent.parent/'lib').glob('libnode*.dylib'):shutil.copy2(library,libraries/library.name)
+    return binary
+
+def native_dependencies(node):
+    """Hash shared non-system Mach-O dependencies; upgrades must stop the next arm."""
+    if sys.platform!='darwin':return {}
+    found={};queue=[node,*(node.parent.parent/'lib').glob('libnode*.dylib')];seen=set()
+    while queue:
+        path=queue.pop().resolve()
+        if path in seen:continue
+        seen.add(path)
+        result=subprocess.run(['/usr/bin/otool','-L',str(path)],capture_output=True,text=True)
+        if result.returncode:continue
+        for line in result.stdout.splitlines()[1:]:
+            dependency=line.strip().split(' (',1)[0]
+            if not dependency.startswith('/') or dependency.startswith(('/usr/lib/','/System/')):continue
+            source=Path(dependency);resolved=source.resolve(strict=True)
+            found[dependency]={'resolved':str(resolved),'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+            queue.append(resolved)
+    return found
 
 def tree_hashes(root,boundary=None):
     boundary=(boundary or root).resolve()
@@ -32,10 +57,15 @@ def source_fingerprint(repository):
 def verify_snapshot(config):
     root=Path(config['runtime_snapshot']);receipt=json.loads((root/'receipt.json').read_text())
     actual={}
-    for name in ['plugin','runtime','home','bin','experiments']:
+    for name in ['plugin','runtime','home','bin','lib','experiments']:
         actual.update({name+'/'+k:v for k,v in tree_hashes(root/name,root).items()})
     if actual!=receipt['files']:raise RuntimeError('Frozen runtime/input snapshot changed; no run started')
-    digest=hashlib.sha256(json.dumps(actual,sort_keys=True).encode()).hexdigest()
+    native=receipt.get('native_libraries',{})
+    for name,expected in native.items():
+        p=Path(name)
+        if str(p.resolve())!=expected['resolved'] or hashlib.sha256(p.read_bytes()).hexdigest()!=expected['sha256']:
+            raise RuntimeError('Shared native library changed; no run started: '+name)
+    digest=hashlib.sha256(json.dumps({'files':actual,'native_libraries':native},sort_keys=True).encode()).hexdigest()
     if digest!=config['runtime_snapshot_sha256']:raise RuntimeError('Snapshot receipt changed')
     return digest
 
@@ -77,17 +107,18 @@ def freeze_runtime(config,directory,*,build=True,repository=None):
                 dest=new/original.relative_to(old);p.unlink();p.symlink_to(os.path.relpath(dest,p.parent));break
         else:raise ValueError('Installed dependency links outside snapshot roots: '+str(source))
     package=json.loads((target/'package.json').read_text());package['dependencies']['dsh-superagent']='link:'+str(plugin);(target/'package.json').write_text(json.dumps(package,indent=2)+'\n')
-    binary=directory/'bin';binary.mkdir();node=shutil.which('node')
+    node=shutil.which('node')
     if not node:raise ValueError('Node is unavailable')
-    shutil.copy2(Path(node).resolve(),binary/'node')
+    node=Path(node).resolve();binary=copy_node(node,directory)
+    native=native_dependencies(node)
     if source_fingerprint(repository)!=source_before:raise RuntimeError('Live source changed during build/snapshot; no run started')
     result=copy.deepcopy(config);result.update(dsh_bin=str(directory/'runtime/node_modules/.bin/dsh'),dsh_home=str(directory/'home'),experiment_root=str(directory/'experiments'),runtime_snapshot=str(directory),node_bin_dir=str(binary),port_lock_home=str(Path(config['dsh_home']).resolve()))
     files={}
-    for name in ['plugin','runtime','home','bin','experiments']:files.update({name+'/'+k:v for k,v in tree_hashes(directory/name,directory).items()})
-    digest=hashlib.sha256(json.dumps(files,sort_keys=True).encode()).hexdigest()
+    for name in ['plugin','runtime','home','bin','lib','experiments']:files.update({name+'/'+k:v for k,v in tree_hashes(directory/name,directory).items()})
+    digest=hashlib.sha256(json.dumps({'files':files,'native_libraries':native},sort_keys=True).encode()).hexdigest()
     revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repository,text=True).strip()
     dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=repository,text=True).strip())
-    receipt={'schema':1,'files':files,'sha256':digest,'source_revision':revision,'source_dirty':dirty,'source_inputs_sha256':source_before,'node_version':subprocess.check_output([str(binary/'node'),'--version'],text=True).strip()}
+    receipt={'schema':1,'files':files,'native_libraries':native,'sha256':digest,'source_revision':revision,'source_dirty':dirty,'source_inputs_sha256':source_before,'node_version':subprocess.check_output([str(binary/'node'),'--version'],text=True).strip()}
     (directory/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');result['runtime_snapshot_sha256']=digest
     # A hash check before every arm detects edits; read-only files also discourage accidental changes.
     for p in directory.rglob('*'):

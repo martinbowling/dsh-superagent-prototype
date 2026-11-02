@@ -1,9 +1,15 @@
-import json,os,tempfile,unittest
+import json,os,tempfile,unittest,sys,shutil,subprocess
 from pathlib import Path
 from unittest.mock import patch
-from snapshot import freeze_runtime,verify_snapshot
+from snapshot import freeze_runtime,verify_snapshot,copy_node
 
 class SnapshotTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='darwin','Mac Node relocation regression')
+    def test_copied_mac_node_can_start_with_its_adjacent_library(self):
+        node=Path(shutil.which('node')).resolve()
+        with tempfile.TemporaryDirectory() as d:
+            binary=copy_node(node,Path(d))
+            self.assertEqual(subprocess.check_output([str(binary/'node'),'--version']),subprocess.check_output([str(node),'--version']))
     def tree(self,root):
         repo=root/'repo';repo.mkdir()
         for name in ['lib','node_modules/.pnpm/dep']:(repo/name).mkdir(parents=True,exist_ok=True)
