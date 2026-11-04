@@ -9,6 +9,7 @@ import copy
 import hashlib
 import html
 import json
+import os
 from pathlib import Path
 import secrets
 import statistics
@@ -23,6 +24,9 @@ from weight_lab import save, train, evaluate, materialize, network, metrics
 from weights_data import digest
 
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def training_environment():
+    env=os.environ.copy();env['PYTHONDONTWRITEBYTECODE']='1';return env
 
 def prepare(root,frozen):
     """Called only after copying/hash-freezing code; seeds are then freshly drawn."""
@@ -146,7 +150,7 @@ def experiment(root,config):
                                  'rule_informed_comparator':'trusted deterministic NN compiler','labeled_feedback':False,'revisions':0})
         state['status']='generating-fresh-policies';receipt();fixtures=prepare(root,frozen)
         log=(root/'training-progress.log').open('w')
-        training=subprocess.Popen([sys.executable,str(snapshot_inputs(frozen)/'rules_experiment.py'),'train-batch','--output',str(root)],stdout=log,stderr=subprocess.STDOUT)
+        training=subprocess.Popen([sys.executable,str(snapshot_inputs(frozen)/'rules_experiment.py'),'train-batch','--output',str(root)],stdout=log,stderr=subprocess.STDOUT,env=training_environment())
         routed=copy.deepcopy(frozen);routed['fixture_input']=fixtures
         state['status']='high-effort-harness';receipt();arm=root/'high'
         run(routed,'blackfold','blackfold',2,[],arm,4800,'on','rules-v1','high',3)

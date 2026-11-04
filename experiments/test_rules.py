@@ -6,10 +6,17 @@ import random
 import subprocess
 import sys
 import unittest
+import tempfile
 from rules_spec import policy, compare, logical, oracle, compile_weights, datasets, fixture
 from weight_spec import parse, logits
+from rules_experiment import training_environment
 
 class RuleTests(unittest.TestCase):
+    def test_training_helper_does_not_mutate_imported_frozen_sources(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);module=root/'frozen_example.py';module.write_text('VALUE=17\n');module.chmod(0o444)
+            subprocess.run([sys.executable,'-c','import frozen_example; assert frozen_example.VALUE==17'],cwd=root,env=training_environment(),check=True)
+            self.assertEqual([p.name for p in root.iterdir()],['frozen_example.py'])
     def test_fresh_instance_generation_is_reproducible_and_distinct(self):
         a=policy(117);self.assertEqual(a,policy(117));self.assertNotEqual(a,policy(118))
         self.assertEqual(len(a['clauses']),12);self.assertEqual(len(a['vetoes']),2)
