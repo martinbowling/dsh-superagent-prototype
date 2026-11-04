@@ -26,6 +26,42 @@ For the new two-task comparison, run both efforts with `--suite v2 --tasks depen
 
 ## Same rubric
 
+### Fresh rule compilation (`rules-v1`)
+
+This follow-up removes the familiar ISBN algorithm. Freeze the installed runtime,
+generator and evaluator first, then draw three fresh 64-bit seeds and generate
+policy programs. Each program has twelve random three-membership conjunctions,
+three groups using at-least / exactly / at-most counts, two vetoes, and a final
+group threshold. The input is any thirteen digits, represented by the same raw
+130-coordinate one-hot input and 99,969-parameter float32 NN.
+
+```sh
+/absolute/path/to/weights-venv/bin/python experiments/rules_experiment.py run \
+  --config /absolute/path/to/fleet.private.json \
+  --output /absolute/path/to/new-rules-experiment
+```
+
+The actual high-effort coordinator runs three policy Tickets with two worker
+slots. Workers receive their fresh rules and no labeled examples or compiler
+weights. `arena_test` remains structural-only. Every proposal is frozen before
+final scoring; failed proposals are not replaced based on test performance.
+There is no labeled revision in this protocol.
+
+The primary test has 10,000 uniform examples per policy. Separate stress strata
+contain 1,000 group-boundary and 1,000 veto-boundary cases, in opposite-label pairs
+differing in one digit. Veto pairs keep group votes identical; group pairs keep
+vetoes inactive. Test selection uses only the Boolean oracle, never candidate
+predictions. Train/test twelve-digit stems are disjoint. A training-majority
+constant contextualizes natural class imbalance.
+
+The fair rule-knowledge comparator is a deterministic compiler given the same
+policy. Its NN is qualified against all 16,384 abstract clause assignments and
+all digit combinations for each clause. Example-only baselines use the same
+architecture with 512 / 8,192 total labels, three seeds, 300 CPU AdamW epochs and
+internal validation checkpoint selection. These baselines have different
+knowledge access. Fresh program instances test composition and translation;
+they do not establish discovery of a new algorithm or superiority to a compiler.
+
 ### Hand-written neural weights (`weights-v1`)
 
 This separate experiment tests algorithm-to-weight construction, not app visuals

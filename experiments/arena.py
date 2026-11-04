@@ -93,12 +93,20 @@ def save(base,block,value):
     return request(base,'settings/'+block,{'value':value,'revision':revision},method='PUT')
 
 def task_file(suite,root=ROOT):
-    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json','app-v2':'tasks-app-v2.json','shared-app-v2':'tasks-shared-app-v2.json','weights-v1':'tasks-weights-v1.json'}
+    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json','app-v2':'tasks-app-v2.json','shared-app-v2':'tasks-shared-app-v2.json','weights-v1':'tasks-weights-v1.json','rules-v1':'tasks-rules-v1.json'}
     if suite not in names:raise ValueError('Unknown fixture suite')
     return root/names[suite]
 
 def plan(config,suite='v2'):
     available=list(config['models'])
+    if suite=='rules-v1':
+        return {'schema':1,'fixture_suite':suite,'reasoning_effort':'high','thinking':'on','policies':3,
+                'generation':'fresh 64-bit seeds after runtime freeze; no existing dataset',
+                'task':'Random digit memberships, conjunctions, at-least/exactly/at-most group counts and vetoes',
+                'architecture':[130,512,64,1],'allocated_parameters':99969,'worker_slots':2,
+                'primary_test':'10000 uniform cases per policy','stress_test':'1000 group-boundary and 1000 veto-boundary cases per policy',
+                'comparators':['trusted compiler with same rule knowledge','example-only training, 512 and 8192 total labels, 3 seeds, 300 epochs'],
+                'rules':['All policies and tests hash-frozen before model calls.','No labeled correctness feedback or test-based revision.','Report every policy including failures.','Training and rule-informed compilation have different knowledge access.']}
     if suite=='weights-v1':
         return {'schema':1,'fixture_suite':suite,'reasoning_effort':'high','thinking':'on',
                 'task':'ISBN-13 checksum validity only; not book existence or citation authenticity',
@@ -339,7 +347,7 @@ if __name__=='__main__':
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
     p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=900)
     p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int)
-    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2','weights-v1'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
+    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2','weights-v1','rules-v1'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
     p.add_argument('--tickets',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:

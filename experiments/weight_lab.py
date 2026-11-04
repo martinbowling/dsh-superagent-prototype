@@ -64,12 +64,12 @@ def evaluate(model, rows):
     if not torch.isfinite(logits).all():raise ValueError('Nonfinite logits')
     return metrics((logits>=0).tolist(),rows)
 
-def train(root, epochs=300, seeds=(11,29,47)):
+def train(root, epochs=300, seeds=(11,29,47), budgets=(512,5062,8192)):
     import torch
     torch.set_num_threads(4);torch.use_deterministic_algorithms(True)
     rows=json.loads((root/'train.json').read_text());out=root/'trained';out.mkdir(exist_ok=True)
     results=[]
-    for n in (512,5062,8192):
+    for n in budgets:
         # Nested label budgets. Split by 12-digit stem, so paired positive/negative
         # variants cannot leak from fitting into checkpoint selection.
         subset=rows[:n]; stems=sorted({s[:12] for s,_,_ in subset})
