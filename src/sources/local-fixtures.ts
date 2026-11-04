@@ -24,6 +24,12 @@ export const Fixture = z.object({ id: z.string().regex(/^[a-z0-9-]{1,80}$/),
 export const FixtureList = z.array(Fixture).max(64).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Duplicate fixture id')
   .refine(items => { const owners = items.filter(x => x.sharedProject).map(x => `${x.sharedProject}:${x.projectRole}`); return new Set(owners).size === owners.length }, 'Duplicate shared component owner')
 export type FixtureTask = z.infer<typeof Fixture>
+/** Build a lossless JSON tool result; optional shared metadata must be omitted, never undefined. */
+export function fixtureReadResult(task: FixtureTask, workspace: Record<string, string>, allowed: string[], publications: Record<string, unknown> = {}) {
+  return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace,
+    ...(task.sharedProject ? { sharedProject: task.sharedProject, projectRole: task.projectRole!, publications } : {}),
+    solution: workspace['solution.py'] ?? null }
+}
 export function fixtureTrigger(fixture: FixtureTask): Trigger {
   return { id: key('fixtures', fixture.id), source: 'fixtures', threads: [{ source: 'fixtures', id: fixture.id }],
     actor: { source: 'fixtures', id: 'experiment' }, human: true, addressed: 'direct', at: '2026-01-01T00:00:00.000Z',
@@ -123,8 +129,7 @@ export function apply(ctx: Context): void {
       const { task, directory, allowed, project } = await locate(exec.agent?.id)
       const snapshot = project && await project.snapshot(task.projectRole!)
       const workspace = snapshot?.files ?? await readFixtureFiles(directory, allowed)
-      return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace,
-        sharedProject: task.sharedProject, projectRole: task.projectRole, publications: snapshot?.publications, solution: workspace['solution.py'] ?? null }
+      return fixtureReadResult(task, workspace, allowed, snapshot?.publications)
     } })
   ctx.tools.register({ name: 'arena_write', description: 'Write a complete allowed output file. path defaults to solution.py; app fixtures list their writableFiles in arena_read.',
     parameters: parameters({ path: { type: 'string' }, content: { type: 'string', maxLength: 64000 } }, ['content']), output,

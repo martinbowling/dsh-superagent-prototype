@@ -26,6 +26,53 @@ For the new two-task comparison, run both efforts with `--suite v2 --tasks depen
 
 ## Same rubric
 
+### Hand-written neural weights (`weights-v1`)
+
+This separate experiment tests algorithm-to-weight construction, not app visuals
+or legal-citation authenticity. Two independent high-effort Tickets hand-write
+numeric JSON weights for ISBN-13 checksum validity; the preselected first proposal
+gets one revision with 5,062 labeled development rows. Both proposals and the
+revision are frozen before the final 16,000-example evaluation. `arena_test` only
+checks schema and finite inference, and intentionally accepts an all-zero network.
+It never returns accuracy or labels. Structural workflow success is therefore
+separate from classification performance.
+
+The fixed float32 network is 130 one-hot inputs → 512 ReLU → 64 ReLU → 1 logit:
+99,969 allocated parameters. Sparse JSON declarations expand into ordinary dense
+weights, with actual nonzero counts reported separately. Generated Python,
+expressions, pickle, external lookups, and weight-generation programs are not
+accepted or executed. Zero-label means zero task-labeled examples, not zero
+pretraining or zero knowledge of the mathematical rule. Syntax/write attempts are
+recorded separately from label access; do not call every successful run one-shot.
+
+```sh
+uv venv /absolute/path/to/weights-venv
+uv pip install --python /absolute/path/to/weights-venv/bin/python numpy torch
+/absolute/path/to/weights-venv/bin/python experiments/handweights.py \
+  --config /absolute/path/to/fleet.private.json \
+  --output /absolute/path/to/fresh-experiment
+/absolute/path/to/weights-venv/bin/python experiments/weight_report.py \
+  /absolute/path/to/fresh-experiment
+```
+
+The selected model must advertise native high effort; default is `blackfold`.
+The actual DSH coordinator, Tickets, worker tools, reporting drain and copied
+runtime are used. Source/model services are not switched. CPU baselines use the
+same architecture/raw inputs with 512/5,062/8,192 total labels, three seeds, and
+300 AdamW epochs. About 20% of each label budget selects a checkpoint by internal
+validation BCE; both fitting and validation labels count toward the budget. Splits
+exclude shared 12-digit stems; test strata cover random, extreme and repeated-run
+digits. Model proposals never see the held-out dataset or its score. The direct
+checksum algorithm and 50% constant baseline contextualize the result.
+
+`--resume` reuses only completed passing workflows and unchanged frozen artifacts;
+it does not retry failed model trials. A data-only `fixture_input` override is
+captured verbatim in the revision's hashed fixture plan, while runtime and grader
+hashes remain identical. The final evaluator refuses a second scoring run in the
+same directory. Save the Python environment versions with results. Treat the
+outcome as a known-rule compilation experiment under the tested training recipe,
+not evidence that hand-written weights generally outperform learned networks.
+
 | Dimension | Points | Evidence |
 | --- | ---: | --- |
 | Correctness | 60 | Objective fixture cases; final artifact independently rechecked |

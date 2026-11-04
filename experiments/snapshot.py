@@ -2,7 +2,7 @@
 import copy,hashlib,json,os,shutil,subprocess,sys
 from pathlib import Path
 
-GRADER_FILES=('check.py','checks_v2.py','app_checks.py','app_checks_v2.py','app_reference.py','component_checks.py')
+GRADER_FILES=('check.py','checks_v2.py','app_checks.py','app_checks_v2.py','app_reference.py','component_checks.py','weight_spec.py')
 
 def copy_node(node,directory):
     binary=directory/'bin';binary.mkdir();libraries=directory/'lib';libraries.mkdir()

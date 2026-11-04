@@ -93,12 +93,22 @@ def save(base,block,value):
     return request(base,'settings/'+block,{'value':value,'revision':revision},method='PUT')
 
 def task_file(suite,root=ROOT):
-    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json','app-v2':'tasks-app-v2.json','shared-app-v2':'tasks-shared-app-v2.json'}
+    names={'v1':'tasks.json','v2':'tasks-v2.json','app-v1':'tasks-app-v1.json','app-v2':'tasks-app-v2.json','shared-app-v2':'tasks-shared-app-v2.json','weights-v1':'tasks-weights-v1.json'}
     if suite not in names:raise ValueError('Unknown fixture suite')
     return root/names[suite]
 
 def plan(config,suite='v2'):
     available=list(config['models'])
+    if suite=='weights-v1':
+        return {'schema':1,'fixture_suite':suite,'reasoning_effort':'high','thinking':'on',
+                'task':'ISBN-13 checksum validity only; not book existence or citation authenticity',
+                'allocated_parameters':99969,'architecture':[130,512,64,1],
+                'zero_label_proposals':2,'primary_candidate':'zero-00, fixed before final scoring',
+                'revision_labels':5062,'trained_label_budgets':[512,5062,8192],'trained_seeds':[11,29,47],
+                'test':'16000 fresh, balanced, train-stem-disjoint examples in random/extremes/runs strata',
+                'tool_feedback':'JSON/schema/finite-inference only; no accuracy or labeled test feedback',
+                'metrics':['heldout accuracy and confusion matrix','per-stratum accuracy','labels accessed','allocated and nonzero parameters','write attempts','workflow wall time and tokens'],
+                'rules':['No executable model output; numeric JSON weights only.','Freeze all artifacts before final scoring.','No test-based candidate or checkpoint selection.','Algorithmic prior knowledge is given to the handwritten arm; do not generalize to training broadly.']}
     return {'schema':2,'fixture_suite':suite,'tasks':[t['id'] for t in json.loads(task_file(suite).read_text())],
       'experiments':[
         {'id':'solo','coordinators':available,'workers':available,'worker_counts':[1],'repeats':3},
@@ -192,7 +202,11 @@ def run_owned(config,coordinator,worker,count,tasks,output,timeout,thinking=DEFA
     source_root=snapshot_inputs(config);grader_files=GRADER_FILES
     for name in grader_files:shutil.copy2(source_root/name,grader/name)
     run_id=f'{coordinator}-{worker}-w{count}-thinking-{thinking}-{effort or "native"}-{suite}'
-    selected=[t for t in json.loads(task_file(suite,source_root).read_text()) if not tasks or t['id'] in tasks]
+    # Optional data-only input override is captured verbatim and hashed in the
+    # fixture plan. Runtime/graders remain frozen; useful for a labeled revision
+    # whose prior artifact does not exist when the runtime is copied.
+    supplied=config.get('fixture_input')
+    selected=[t for t in (copy.deepcopy(supplied) if supplied is not None else json.loads(task_file(suite,source_root).read_text())) if not tasks or t['id'] in tasks]
     if not selected:raise ValueError('No matching tasks')
     # At least count tickets for a scaling run; names remain disjoint and deterministic.
     fixtures=[]
@@ -325,7 +339,7 @@ if __name__=='__main__':
     p.add_argument('--workers',type=int,choices=[1,2,4,8],default=1);p.add_argument('--tasks',default='')
     p.add_argument('--output',type=Path);p.add_argument('--timeout',type=int,default=900)
     p.add_argument('--thinking',choices=['off','on'],default=DEFAULT_THINKING);p.add_argument('--max-tokens',type=int)
-    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
+    p.add_argument('--suite',choices=['v1','v2','app-v1','app-v2','shared-app-v2','weights-v1'],default='v2');p.add_argument('--reasoning-effort',choices=['low','high'])
     p.add_argument('--tickets',type=int);a=p.parse_args()
     c=json.loads(a.config.read_text())
     if a.max_tokens is not None:

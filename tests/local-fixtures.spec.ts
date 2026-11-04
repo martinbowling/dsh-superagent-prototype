@@ -1,11 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { fixtureTrigger, FixtureList, fixtureKind } from '../src/sources/local-fixtures.ts'
+import { fixtureTrigger, FixtureList, fixtureKind, fixtureReadResult } from '../src/sources/local-fixtures.ts'
 import { Setup } from '../src/app/setup.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { testMachine } from './fixtures/deployment.ts'
 
 describe('opt-in local fixture experiments', () => {
+  it('returns lossless JSON for standalone fixture reads and retains shared metadata when present', () => {
+    const [task] = FixtureList.parse([{ id: 'isbn13', prompt: 'Write weights.', files: { 'weights.json': '' }, writableFiles: ['weights.json'] }])
+    const result = fixtureReadResult(task!, { 'weights.json': '' }, ['weights.json'])
+    expect(result).toStrictEqual(JSON.parse(JSON.stringify(result)))
+    expect(result).not.toHaveProperty('sharedProject')
+    expect(result).not.toHaveProperty('publications')
+    expect(result.solution).toBeNull()
+    const [shared] = FixtureList.parse([{ id: 'taskboard', prompt: 'Build store.', sharedProject: 'taskboard', projectRole: 'database', writableFiles: ['store.py'] }])
+    const value = fixtureReadResult(shared!, { 'store.py': 'source' }, ['store.py'])
+    expect(value).toStrictEqual(JSON.parse(JSON.stringify(value)))
+    expect(value).toMatchObject({ sharedProject: 'taskboard', projectRole: 'database', publications: {} })
+  })
   it('creates stable addressed local inputs and never a service URL', () => {
     const [task] = FixtureList.parse([{ id: 'ledger', prompt: 'Fix the ledger.' }])
     const a = fixtureTrigger(task!), b = fixtureTrigger(task!)
