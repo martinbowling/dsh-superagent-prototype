@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from weight_spec import PARAMETERS, parse, logits, structural_result
 from weights_data import complete, valid, make_splits, digest
-from handweights import archive, revision_fixture
+from handweights import archive, revision_fixture, label_coverage
 
 def reference():
     # Analyst-authored triangular-wave proof. NEVER supplied to the model.
@@ -98,5 +98,20 @@ class WeightTests(unittest.TestCase):
             value=archive(arm,root,'zero-label',0)[0];self.assertEqual(value['name'],'zero-00');self.assertEqual(value['write_attempts'],1)
             (work/'weights.json').write_text('changed')
             with self.assertRaisesRegex(ValueError,'changed'):archive(arm,root,'zero-label',0)
+
+    def test_label_coverage_requires_every_character_and_checks_page_contents(self):
+        with tempfile.TemporaryDirectory() as d:
+            arm=Path(d);(arm/'state').mkdir();path=arm/'state/arena-events.jsonl'
+            def events(pages):
+                rows=[]
+                for i,value in enumerate(pages):
+                    rows.append({'sessionId':'worker-x','event':{'type':'tool/call','data':{'name':'arena_read','callId':str(i)}}})
+                    rows.append({'sessionId':'worker-x','event':{'type':'tool/result','data':{'message':{'toolCallId':str(i),'content':[{'type':'text','text':json.dumps(value)}]}}}})
+                path.write_text(''.join(json.dumps(v)+'\n' for v in rows))
+            pages=[{'path':'labeled.csv','offset':0,'content':'abc'},{'path':'labeled.csv','offset':4,'content':'ef'}]
+            events(pages);self.assertFalse(label_coverage(arm,'abcdef')['all_delivered'])
+            pages.append({'path':'labeled.csv','offset':2,'content':'cd'});events(pages);self.assertTrue(label_coverage(arm,'abcdef')['all_delivered'])
+            pages.append({'path':'labeled.csv','offset':0,'content':'wrong'});events(pages)
+            with self.assertRaisesRegex(ValueError,'differs'):label_coverage(arm,'abcdef')
 
 if __name__=='__main__':unittest.main()

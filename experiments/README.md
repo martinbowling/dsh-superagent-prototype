@@ -44,6 +44,10 @@ expressions, pickle, external lookups, and weight-generation programs are not
 accepted or executed. Zero-label means zero task-labeled examples, not zero
 pretraining or zero knowledge of the mathematical rule. Syntax/write attempts are
 recorded separately from label access; do not call every successful run one-shot.
+Large tool inputs use `arena_read(path=..., offset=0, limit=4000)` pages rather
+than relying on a transport-truncated response. Default reads return file catalogs
+when necessary. The revision follows every `nextOffset`, and a trusted trace
+check verifies complete label delivery before allowing final scoring.
 
 ```sh
 uv venv /absolute/path/to/weights-venv

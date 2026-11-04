@@ -49,9 +49,35 @@ def archive(arm, root, kind, labels):
 def revision_fixture(original, prior, training):
     fixture=copy.deepcopy(original)
     fixture['prompt']='ONE LABELED REVISION. You are given the frozen first candidate weights in prior.weights.json and exactly 5,062 labeled development rows in labeled.csv. Revise or retain that construction using mathematical reasoning. No gradient training or code execution is available. This is your only labeled revision. Final held-out data and scores remain inaccessible. If the prior construction is already correct, retaining it is acceptable; explain the audit. The same architecture, JSON schema and structural-only test apply.\n\n'+fixture['prompt'].replace('This is a zero-labeled-example mathematical construction experiment.','This is a 5,062-labeled-example revision experiment.').replace('No labeled examples or test distribution samples are supplied.','Labeled development examples are supplied in labeled.csv; no final test examples are supplied.')
+    fixture['prompt']+='\nRead prior.weights.json and ALL of labeled.csv using arena_read(path=...,offset=0,limit=4000) and follow nextOffset until null. The default read returns catalogs for large inputs. Do not infer missing rows from the checksum rule; access the entire provided label file before submitting.'
     fixture['files']={'weights.json':'','prior.weights.json':prior,
                       'labeled.csv':'digits,valid\n'+''.join(f'{s},{y}\n' for s,y,_ in training[:5062])}
     return fixture
+
+def label_coverage(arm, expected):
+    ranges=[];reads=set()
+    for line in (arm/'state/arena-events.jsonl').read_text().splitlines():
+        item=json.loads(line);event=item['event']
+        data=event.get('data',{});session=item.get('sessionId','')
+        if event['type']=='tool/call' and data.get('name')=='arena_read':reads.add((session,data['callId']))
+        if event['type']!='tool/result':continue
+        message=data.get('message',{})
+        if message.get('isError') or (session,message.get('toolCallId')) not in reads:continue
+        for block in message.get('content',[]):
+            if block.get('type')!='text':continue
+            try:value=json.loads(block['text'])
+            except ValueError:continue
+            if not isinstance(value,dict):continue
+            files=value.get('files',{})
+            if isinstance(files,dict) and files.get('labeled.csv')==expected:ranges.append((0,len(expected)))
+            if value.get('path')=='labeled.csv':
+                start=value['offset'];text=value['content']
+                if expected[start:start+len(text)]!=text:raise ValueError('Delivered label page differs from the frozen input')
+                ranges.append((start,start+len(text)))
+    end=0;covered=0
+    for start,stop in sorted(ranges):
+        if stop>end:covered+=max(0,stop-max(start,end));end=stop
+    return {'characters_total':len(expected),'characters_delivered':covered,'pages':len(ranges),'all_delivered':covered==len(expected)}
 
 def experiment(config,root,model='blackfold',resume=False,epochs=300):
     root=root.resolve()
@@ -81,6 +107,8 @@ def experiment(config,root,model='blackfold',resume=False,epochs=300):
         original=json.loads((snapshot_inputs(frozen)/'tasks-weights-v1.json').read_text())[0]
         revised=copy.deepcopy(frozen);revised['fixture_input']=[revision_fixture(original,Path(primary['artifact']).read_text(),json.loads((root/'train.json').read_text()))]
         state['status']='revision';receipt();arm=trial('revision-high',1,revised)
+        coverage=label_coverage(arm,revised['fixture_input'][0]['files']['labeled.csv']);save(arm/'label-coverage.json',coverage)
+        if not coverage['all_delivered']:raise RuntimeError('Revision did not receive the full label file; no final scoring')
         submissions+=archive(arm,root,'one-labeled-revision',5062);save(root/'submissions.json',submissions)
         state['artifacts_frozen_at']=time.time();state['status']='training';receipt()
         if not (root/'training.json').exists():train(root,epochs)

@@ -26,9 +26,22 @@ export const FixtureList = z.array(Fixture).max(64).refine(items => new Set(item
 export type FixtureTask = z.infer<typeof Fixture>
 /** Build a lossless JSON tool result; optional shared metadata must be omitted, never undefined. */
 export function fixtureReadResult(task: FixtureTask, workspace: Record<string, string>, allowed: string[], publications: Record<string, unknown> = {}) {
-  return { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace,
+  const result = { fixture: task.id, prompt: task.prompt, files: task.files, writableFiles: allowed, workspace,
     ...(task.sharedProject ? { sharedProject: task.sharedProject, projectRole: task.projectRole!, publications } : {}),
     solution: workspace['solution.py'] ?? null }
+  if (Buffer.byteLength(JSON.stringify(result)) <= 32000) return result
+  const catalog = (files: Record<string, string>) => Object.fromEntries(Object.entries(files).map(([path, content]) => [path, { characters: content.length, bytes: Buffer.byteLength(content) }]))
+  return { ...result, files: {}, workspace: {}, solution: null, paged: true,
+    inputFiles: catalog(task.files), workspaceFiles: catalog(workspace),
+    instructions: 'Large files require paged reads. Call arena_read({path, offset:0, limit:4000}), then follow nextOffset until null. Offsets count characters. No input files are omitted from the catalogs.' }
+}
+/** Bound a file response below the transport spill threshold, including escaped JSON. */
+export function fixtureReadPage(task: FixtureTask, workspace: Record<string, string>, path: string, offset: number, limit: number) {
+  const content = workspace[path] ?? task.files[path]
+  if (content === undefined) throw new Error('No such fixture input or allowed workspace file')
+  const end = Math.min(offset + limit, content.length)
+  return { fixture: task.id, path, offset, content: content.slice(offset, end), totalCharacters: content.length,
+    nextOffset: end < content.length ? end : null }
 }
 export function fixtureTrigger(fixture: FixtureTask): Trigger {
   return { id: key('fixtures', fixture.id), source: 'fixtures', threads: [{ source: 'fixtures', id: fixture.id }],
@@ -124,11 +137,13 @@ export function apply(ctx: Context): void {
   const output = { schema: { type: 'object' as const, additionalProperties: true },
     render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] }
   const parameters = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
-  ctx.tools.register({ name: 'arena_read', description: 'Read the assigned fixture requirements, input files, and current solution.',
-    parameters: parameters({}), output, execute: async (_args, exec) => {
+  ctx.tools.register({ name: 'arena_read', description: 'Read fixture requirements and current files. Large files return catalogs; read a named path in pages and follow nextOffset until null.',
+    parameters: parameters({ path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 4000 } }), output, execute: async (args, exec) => {
+      const page = z.object({ path: FixturePath.optional(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(4000).default(4000) }).strict().parse(args)
       const { task, directory, allowed, project } = await locate(exec.agent?.id)
       const snapshot = project && await project.snapshot(task.projectRole!)
       const workspace = snapshot?.files ?? await readFixtureFiles(directory, allowed)
+      if (page.path) return fixtureReadPage(task, workspace, page.path, page.offset, page.limit)
       return fixtureReadResult(task, workspace, allowed, snapshot?.publications)
     } })
   ctx.tools.register({ name: 'arena_write', description: 'Write a complete allowed output file. path defaults to solution.py; app fixtures list their writableFiles in arena_read.',

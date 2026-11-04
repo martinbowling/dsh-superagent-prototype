@@ -21,7 +21,7 @@ def render(root):
         cells=''.join(f'<td>{r["metrics"]["strata"][f]["accuracy"]:.2%}</td>' for f in ('random','extremes','runs'))
         strata.append(f'<tr><td>{html.escape(r["name"])}</td>{cells}</tr>')
     workflows=[]
-    for name in ('zero-high','revision-high'):
+    for name in ('zero-high','revision-high-paged' if (root/'revision-high-paged').exists() else 'revision-high'):
         path=root/name/'summary.json'
         if not path.exists():continue
         summary=json.loads(path.read_text());manifest=json.loads((root/name/'manifest.json').read_text())
@@ -39,6 +39,9 @@ def render(root):
     <h2>Actual harness workflow</h2>'''+''.join(workflows)+'''<p>Coordinator and worker requests use native <code>enable_thinking=true, reasoning_effort=high</code>, with a 131,072-token output ceiling. The zero-label arm has two worker slots and two Tickets; the revision has one. Model services, weights and rollback setup were retained.</p>
     <p><a href="comparison.json">Full metrics and artifact hashes</a> · <a href="data-receipt.json">Dataset receipt</a> · <a href="submissions.json">Frozen submissions</a> · <a href="training.json">Training curves and checkpoint evidence</a> · <a href="experiment.json">Experiment receipt</a></p>
     <footer>Checksum definition: <a href="'''+source+'''">International ISBN Agency</a>. Test samples are synthetic checksum strings. Model-created weight JSON is data, with no generated Python executed.</footer></html>'''
+    if (root/'paging-repair.json').exists():
+        notice='<div class="box"><b>Infrastructure attempts preserved.</b> An initial tool read failed JSON validation; a later label response exceeded the transport limit. The final revision used paged reads and a new runtime snapshot, with unchanged grader and zero-label artifacts. Full label delivery was independently checked. These arm timings are not a matched performance comparison. <a href="paging-repair.json">Repair receipt</a></div>'
+        content=content.replace('<h2>Actual harness workflow</h2>',notice+'<h2>Actual harness workflow</h2>')
     (root/'report.html').write_text(content)
     return root/'report.html'
 
