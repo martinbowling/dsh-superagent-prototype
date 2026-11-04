@@ -1,0 +1,17 @@
+[
+  {
+    "id": "ledger",
+    "prompt": "Implement summarize(events) in solution.py. Each event has string id, string account, type credit or debit, and a nonnegative decimal-string amount with at most two fractional digits. Return account balances in integer cents. Credit adds; debit subtracts. Repeated identical event ids count once; conflicting reuse of an id raises ValueError. Reject malformed events/amounts with ValueError; reject bool/non-string amounts, empty ids/accounts, and unsupported types. Preserve the input. Inspect the fixture with arena_read, implement with arena_write, run arena_test, repair failures, then report ready through the orchestrator tool. This is local-only work; do not create commits or pull requests.",
+    "files": {"ledger.py": "def summarize(events):\n    out = {}\n    for event in events:\n        out[event['account']] = out.get(event['account'], 0) + int(float(event['amount']) * 100)\n    return out\n"}
+  },
+  {
+    "id": "intervals",
+    "prompt": "Implement merge_intervals(items) in solution.py. Input is a list of two-element lists/tuples containing finite int or float endpoints. Return a sorted list of tuples merging overlapping OR touching intervals. Discard zero-length intervals. Reject inverted intervals, bool endpoints, nonnumeric/nonfinite endpoints, and malformed pairs with ValueError. Preserve the input. Inspect with arena_read, write with arena_write, test with arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {"intervals.py": "def merge_intervals(items):\n    return sorted(items)\n"}
+  },
+  {
+    "id": "pagination",
+    "prompt": "Implement paginate(items, cursor=None, limit=20) in solution.py. items is an ordered list of dictionaries with unique nonempty string id values. Return {'items': selected_items, 'next_cursor': last_selected_id_if_more_remain_else_None}. An id cursor starts AFTER that id; None starts at the beginning. Preserve order and inputs. Reject absent/invalid cursors, duplicate/invalid ids, malformed items, and limits that are not integers 1 through 100 (including bool) with ValueError. Empty input with None returns an empty page. Inspect with arena_read, write with arena_write, test with arena_test, repair failures, then report ready. Local artifacts only; no commits or pull requests.",
+    "files": {"pagination.py": "def paginate(items, cursor=None, limit=20):\n    return {'items': items[:limit], 'next_cursor': None}\n"}
+  }
+]

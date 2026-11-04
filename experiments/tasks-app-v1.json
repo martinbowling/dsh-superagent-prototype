@@ -1,0 +1,18 @@
+[
+  {
+    "id": "taskboard",
+    "prompt": "Build Taskboard, a small working web app, using exactly app.py, store.py, templates/index.html and static/style.css. Python standard library only; no installs, JavaScript or external services. Read the existing files with arena_read and write each complete file using arena_write(path=...,content=...).\napp.py starts with python app.py, reading APP_HOST, APP_PORT, APP_DB from environment (defaults 127.0.0.1, 8765, /tmp/taskboard.sqlite). Import store and use SQLite persistence. Task ids are positive increasing integers; task objects have exactly id(int), title(str), done(bool).\nHTTP API: GET /health => {status:ok}; GET /api/tasks?status=all|open|done&q=text => {tasks:[...]}, default all, ordered by id ascending, q is literal Unicode-case-insensitive title substring (percent is literal). POST /api/tasks accepts exactly {title:str}, trims it and requires 1..120 characters, returns 201 {task:...}. PATCH /api/tasks/<id> accepts exactly {done:bool}, returns 200 {task:...}. DELETE same route returns 204 empty body. Unknown ids/routes return 404. API errors are JSON {error:str}. Invalid JSON, schemas/values or filters return 400; incorrect JSON media type 415; bodies over 8192 bytes 413; unsupported methods 405. Support concurrent creates with unique ids.\nServer-rendered UI: GET / uses the actual templates/index.html file, title Taskboard, a main element, viewport meta, visible tasks/status, filters and an accessible labeled title input. Escape task titles in HTML. Link and serve the exact static/style.css file, with responsive @media and keyboard :focus styling. No scripts. HTML forms use POST /tasks (urlencoded title), POST /tasks/<id>/toggle, POST /tasks/<id>/delete; successful form actions return 303 Location: /. Reject invalid form titles with 400. Never expose arbitrary files/path traversal.\nstore.py exposes init_db(path), list_tasks(path,status='all',query=''), create_task(path,title)->task, set_done(path,id,done)->task or None when absent, delete_task(path,id)->bool. Validate title/done/filter with ValueError; persist across server restarts. Build and integration tests will compile both modules, start the server in an isolated container, exercise HTTP and forms, inspect the UI/template/CSS, test concurrent requests, restart it, and independently exercise store.py.\nUse arena_test to build/test, repair failures, then report ready only once it passes. Keep all work in the allowed files. No git commits, deployments or messages.",
+    "files": {
+      "app.py": "import store\n# TODO: start the Taskboard HTTP server\n",
+      "store.py": "# TODO: SQLite persistence and validation\n",
+      "templates/index.html": "<!doctype html><html><head><title>Taskboard</title></head><body><!-- TODO --></body></html>\n",
+      "static/style.css": "/* TODO: responsive Taskboard styles */\n"
+    },
+    "writableFiles": [
+      "app.py",
+      "store.py",
+      "templates/index.html",
+      "static/style.css"
+    ]
+  }
+]

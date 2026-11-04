@@ -1,0 +1,53 @@
+{
+  "dsh_bin": "dsh",
+  "dsh_home": "/absolute/path/to/dedicated-experiment-home",
+  "profile": "arena",
+  "port": 3086,
+  "dsh_version": "0.2.1-rc.3",
+  "docker_ssh": "",
+  "python_image": "python:3.12-alpine",
+  "models": {
+    "blackfold": {
+      "base_url": "http://127.0.0.1:18888/v1",
+      "model": "DeepSeek-1017-BLACKFOLD",
+      "context_window": 1048576,
+      "max_tokens": 131072,
+      "backend_concurrency": 4,
+      "hardware": "Record actual hosts, quantization, engine revision and interconnect",
+      "supported_reasoning_efforts": [
+        "low",
+        "high"
+      ]
+    },
+    "glm": {
+      "base_url": "http://127.0.0.1:18000/v1",
+      "model": "nvidia/GLM-5.3-Flash-FP4-Local",
+      "context_window": 262144,
+      "max_tokens": 131072,
+      "backend_concurrency": 1,
+      "thinking_controls": {
+        "on": {
+          "reasoning_effort": "low"
+        },
+        "off": {
+          "reasoning_effort": "low",
+          "enable_thinking": false
+        }
+      },
+      "thinking_off_prefill": true,
+      "hardware": "Record actual hosts, quantization and backend limits",
+      "supported_reasoning_efforts": [
+        "low",
+        "high"
+      ]
+    },
+    "qwen": {
+      "base_url": "http://127.0.0.1:18889/v1",
+      "model": "qwen3.8-flash-next",
+      "context_window": 262144,
+      "max_tokens": 131072,
+      "backend_concurrency": 4,
+      "hardware": "Single GB10 NVFP4; verify the actual checkpoint, context, concurrency and endpoint before running"
+    }
+  }
+}

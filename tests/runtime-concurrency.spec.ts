@@ -890,6 +890,9 @@ describe('the Executor\'s parts', () => {
       settings, '/state')
     expect(execution).toEqual(expect.objectContaining({ name: 'fix-typo-ticket-01234' }))
     expect(execution).not.toHaveProperty('session')
+    const local = ticketExecution(ticket, { kind: 'accept', title: 'Fix', scope: 'Fix', reason: 'r', name: 'same-name' } as never, settings, '/state', true)
+    expect(local.directory).toBe('/state/work/' + ticket.id)
+    expect(ticketExecution({ ...ticket, id: 'different-ticket' } as Ticket, { kind: 'accept', title: 'Fix', scope: 'Fix', reason: 'r', name: 'same-name' } as never, settings, '/state', true).directory).not.toBe(local.directory)
     // The source Trigger goes with the assignment, so the text does not point at it.
     expect(execution.assignment).toContain('Scope: the typo.')
     expect(execution.assignment).not.toContain('trigger/tr1')

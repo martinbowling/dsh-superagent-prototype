@@ -22,6 +22,7 @@ import type { RegisterTool, Tool } from './tools/tool.ts'
 
 /** Host dependencies used by `Sessions`. */
 export interface SessionsHost {
+  readonly localFixtures?: boolean
   /** DSH Cordis context: sessions, agents, persistence, and their events. */
   readonly context: Context
   readonly store: Pick<Store, 'tickets' | 'settings' | 'get' | 'set' | 'keys'>
@@ -260,7 +261,7 @@ export class Sessions {
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
+      binding.disposers.push(agent.ctx.tools.restrict({ allow: host.localFixtures ? [] : ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
     } else {
       // An Executor Session keeps the profile's work tools it has, which DSH requires to be known; its own tools are not masked.
@@ -289,7 +290,7 @@ export class Sessions {
   private workOnly(agent: Agent, ticketId: string): (() => void)[] {
     const store = this.host.store
     const parent = scopeParentOf(agent)
-    const allow = WORK_TOOLS.filter(name => agent.ctx.tools.get(name, parent))
+    const allow = (this.host.localFixtures ? ['arena_read', 'arena_write', 'arena_test', 'arena_publish'] : WORK_TOOLS).filter(name => agent.ctx.tools.get(name, parent))
     return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(() => {
       const current = store.tickets.get(ticketId)
       return !current || !liveTicket(current) ? 'Ticket ended; new work needs a new authorized ticket' : undefined
